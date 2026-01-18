@@ -5,7 +5,7 @@ Transformed single Spin-to-Win game into a **multi-game CKB arcade platform** in
 
 **Status:** ✅ Fully Functional on Localhost  
 **Network:** CKB Testnet  
-**Duration:** 2 Weeks
+**Duration:** 3 Weeks
 
 ---
 
@@ -106,7 +106,7 @@ User Connects → Selects Game → Places Bet → Plays Game
 
 ## 🎯 Achievements
 
-- **Built complete arcade platform** in 2 weeks
+- **Built complete arcade platform** in 3 weeks
 - **Integrated real CKB transactions** with testnet
 - **Created professional gaming experience** with animations
 - **Implemented scalable architecture** for future growth

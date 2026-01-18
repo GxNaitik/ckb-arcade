@@ -38,9 +38,9 @@ Transformed single Spin-to-Win game into a **multi-game CKB arcade platform** in
 
 
 
-### Individual Game Layout
+## 🎨 Individual Game Layout
 
-## 🎨 UI Layout Preview
+### UI Layout Preview
 <table>
   <tr>
     <td style="padding:10px">

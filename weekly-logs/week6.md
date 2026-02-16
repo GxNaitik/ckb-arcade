@@ -1,6 +1,6 @@
 # CKB Arcade - Weekly Summary Report
 
-**Week of:** February 2026  
+**Week of:** 11 - 16 February 2026  
 **Project:** CKB Arcade - Dino Run Enhancement & Audio Features
 
 ---

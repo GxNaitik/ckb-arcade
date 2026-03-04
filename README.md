@@ -1,5 +1,8 @@
 # 🎮 CKB ARCADE
 
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Play_Now!-blue?style=for-the-badge&logo=vercel)](https://ckb-arcade.vercel.app)
+
+
 A decentralized multi-game arcade platform built on the **Nervos CKB blockchain (Testnet)**. Players connect their CKB wallet, pick from multiple arcade games, place bets using testnet CKB tokens, and receive automatic payouts — all on-chain.
 
 ## 🎯 Game Collection

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # 🎮 CKB ARCADE
 
 A decentralized multi-game arcade platform built on the **Nervos CKB blockchain (Testnet)**. Players connect their CKB wallet, pick from multiple arcade games, place bets using testnet CKB tokens, and receive automatic payouts — all on-chain.
@@ -218,4 +217,3 @@ This project is licensed under the MIT License.
 =======
 # ckb-arcade
 An arcade place where you can play different-different games and earn money for CKB
->>>>>>> 16b7b853f63ae760c09f27743b4ce6db67cc2d70

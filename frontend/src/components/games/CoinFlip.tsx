@@ -261,13 +261,14 @@ export function CoinFlip({
       </div>
 
       {/* Coin Display */}
-      <div className="relative w-48 h-48">
+      <div className="relative w-48 h-48" style={{ perspective: '1000px' }}>
         <div
           className="w-full h-full relative transition-transform ease-[cubic-bezier(0.2,0,0,1)] duration-[2000ms]"
-          style={{ transform: `rotateY(${coinRotation}deg)` }}
+          style={{ transform: `rotateY(${coinRotation}deg)`, transformStyle: 'preserve-3d' }}
         >
           {/* Heads Side */}
-          <div className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-full flex items-center justify-center shadow-2xl border-4 border-yellow-300">
+          <div className="absolute inset-0 bg-gradient-to-br from-yellow-400 to-yellow-600 rounded-full flex items-center justify-center shadow-2xl border-4 border-yellow-300"
+            style={{ backfaceVisibility: 'hidden' }}>
             <div className="text-center">
               <div className="text-6xl mb-2">👑</div>
               <div className="text-black font-bold text-xl">HEADS</div>
@@ -276,7 +277,7 @@ export function CoinFlip({
 
           {/* Tails Side */}
           <div className="absolute inset-0 bg-gradient-to-br from-gray-400 to-gray-600 rounded-full flex items-center justify-center shadow-2xl border-4 border-gray-300"
-            style={{ transform: 'rotateY(180deg)' }}>
+            style={{ transform: 'rotateY(180deg)', backfaceVisibility: 'hidden' }}>
             <div className="text-center">
               <div className="text-6xl mb-2">🦅</div>
               <div className="text-white font-bold text-xl">TAILS</div>

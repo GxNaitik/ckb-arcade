@@ -1,0 +1,112 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@400;700;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Cyber Casino Palette */
+  --background: #050505;
+  --foreground: #ffffff;
+
+  --primary: #39ff14; /* Neon Green */
+  --primary-foreground: #000000;
+  --primary-rgb: 57 255 20;
+
+  --secondary: #ff00ff; /* Hot Pink */
+  --secondary-foreground: #ffffff;
+  --secondary-rgb: 255 0 255;
+
+  --accent: #00f3ff; /* Electric Cyan */
+  --accent-foreground: #000000;
+  --accent-rgb: 0 243 255;
+
+  --card: rgba(20, 20, 25, 0.8);
+  --card-foreground: #ffffff;
+
+  --border: rgba(255, 255, 255, 0.1);
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background-color: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  overflow-x: hidden;
+  /* Complex Grid Background */
+  background-image: 
+    linear-gradient(rgba(57, 255, 20, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(57, 255, 20, 0.05) 1px, transparent 1px),
+    radial-gradient(circle at 50% 50%, rgba(20, 20, 20, 0) 0%, #050505 100%);
+  background-size: 50px 50px, 50px 50px, 100% 100%;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', sans-serif;
+}
+
+/* Glassmorphism Utilities */
+.glass-panel {
+  background: rgba(15, 15, 20, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+}
+
+.glass-button {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-button:hover:not(:disabled) {
+  background: rgba(57, 255, 20, 0.1);
+  border-color: var(--primary);
+  box-shadow: 0 0 20px rgba(57, 255, 20, 0.2);
+  transform: translateY(-1px);
+}
+
+.glass-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Text Glows */
+.text-glow {
+  text-shadow: 0 0 20px rgba(57, 255, 20, 0.6);
+}
+
+.text-glow-pink {
+  text-shadow: 0 0 20px rgba(255, 0, 255, 0.6);
+}
+
+.text-glow-cyan {
+  text-shadow: 0 0 20px rgba(0, 243, 255, 0.6);
+}
+
+/* Animations */
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* Wheel Specific */
+.wheel-container {
+  perspective: 1000px;
+}
+
+.wheel-shine {
+  background: linear-gradient(135deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 50%, rgba(255,255,255,0) 100%);
+}

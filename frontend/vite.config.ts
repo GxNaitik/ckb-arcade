@@ -78,7 +78,9 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: process.env.NODE_ENV === 'development',
-    minify: 'terser',
+    // Use esbuild (Vite default) instead of terser — terser breaks Lit web components
+    // used by @ckb-ccc/connector-react
+    minify: 'esbuild',
 
     // Chunk optimization
     rollupOptions: {
@@ -96,25 +98,6 @@ export default defineConfig({
     // Asset optimization
     assetsInlineLimit: 4096,
     cssCodeSplit: true,
-
-    // Terser options for production
-    terserOptions: process.env.NODE_ENV === 'production' ? {
-      compress: {
-        drop_debugger: true,
-        pure_funcs: ['console.log', 'console.info', 'console.debug'],
-        passes: 2
-      },
-      mangle: {
-        safari10: true,
-        properties: {
-          regex: /^_/
-        }
-      },
-      format: {
-        comments: false
-      }
-    } : undefined,
-
     reportCompressedSize: true
   },
 

@@ -69,8 +69,8 @@ export default defineConfig({
     })
   ],
 
-  // Base configuration
-  base: './',
+  // Base configuration — use '/' for Vercel deployment (absolute paths)
+  base: '/',
 
   // Build optimization
   build: {
@@ -100,9 +100,8 @@ export default defineConfig({
     // Terser options for production
     terserOptions: process.env.NODE_ENV === 'production' ? {
       compress: {
-        drop_console: true,
         drop_debugger: true,
-        pure_funcs: ['console.log', 'console.info', 'console.debug', 'console.warn'],
+        pure_funcs: ['console.log', 'console.info', 'console.debug'],
         passes: 2
       },
       mangle: {

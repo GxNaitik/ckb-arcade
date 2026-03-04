@@ -214,6 +214,4 @@ This project is licensed under the MIT License.
 ---
 
 **⚠️ Disclaimer:** This is a testnet demo project for educational purposes. All games use CKB testnet tokens with no real monetary value. Play responsibly.
-=======
-# ckb-arcade
-An arcade place where you can play different-different games and earn money for CKB
+

@@ -120,6 +120,8 @@ export function CoinFlip({
       setPayoutTxHash('');
       setPayoutAmountCkb(null);
       setResult(null);
+      // Reset rotation to 0 so each flip starts fresh (prevents parity drift)
+      setCoinRotation(0);
 
       let toLock: ccc.Script;
       try {
@@ -150,15 +152,24 @@ export function CoinFlip({
 
       // Animate coin flip
       playCoinFlipSound();
-      const flips = 20 + Math.floor(Math.random() * 10);
       const finalResult = Math.random() < 0.5 ? 'heads' : 'tails';
-      const rotationPerFlip = 180;
-      const totalRotation = flips * rotationPerFlip + (finalResult === 'tails' ? 0 : 180);
 
-      setCoinRotation(prev => prev + totalRotation);
+      // The coin's front face (0° / rotateY(0)) shows HEADS.
+      // The back face (rotateY(180°)) shows TAILS.
+      // We need the final rotation to land on:
+      //   - Heads: total rotation is a multiple of 360° (front face visible)
+      //   - Tails: total rotation is 180° + a multiple of 360° (back face visible)
+      // Use enough full spins for a dramatic animation, then add the correct offset.
+      const fullSpins = 10 + Math.floor(Math.random() * 5); // 10-14 full spins
+      const baseRotation = fullSpins * 360;
+      const totalRotation = baseRotation + (finalResult === 'tails' ? 180 : 0);
 
-      // Wait for animation
-      await new Promise(r => setTimeout(r, 2000));
+      // Small delay so the browser registers the reset to 0 before animating
+      await new Promise(r => setTimeout(r, 50));
+      setCoinRotation(totalRotation);
+
+      // Wait for animation to finish
+      await new Promise(r => setTimeout(r, 2200));
 
       setResult(finalResult);
 

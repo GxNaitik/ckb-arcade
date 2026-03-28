@@ -110,13 +110,13 @@ app.get('/api/games', (req, res) => {
       isNew: true,
     },
   ];
-  
+
   res.json(games);
 });
 
 app.get('/api/stats/:gameId?', (req, res) => {
   const { gameId } = req.params;
-  
+
   if (gameId) {
     const stats = gameStats[gameId];
     if (!stats) {
@@ -131,16 +131,16 @@ app.get('/api/stats/:gameId?', (req, res) => {
 app.post('/api/stats/:gameId', (req, res) => {
   const { gameId } = req.params;
   const { playerAddress, wagered, won, outcome } = req.body;
-  
+
   if (!gameStats[gameId]) {
     return res.status(404).json({ error: 'Game not found' });
   }
-  
+
   // Update global game stats
   gameStats[gameId].totalWagered += Number(wagered) || 0;
   gameStats[gameId].totalWon += Number(won) || 0;
   gameStats[gameId].gamesPlayed += 1;
-  
+
   // Update player stats
   if (playerAddress) {
     if (!playerStats.has(playerAddress)) {
@@ -156,14 +156,14 @@ app.post('/api/stats/:gameId', (req, res) => {
         lastPlayed: new Date(),
       };
     }
-    
+
     playerGameStats[gameId].totalWagered += Number(wagered) || 0;
     playerGameStats[gameId].totalWon += Number(won) || 0;
     playerGameStats[gameId].gamesPlayed += 1;
     playerGameStats[gameId].biggestWin = Math.max(playerGameStats[gameId].biggestWin, Number(won) || 0);
     playerGameStats[gameId].lastPlayed = new Date();
   }
-  
+
   res.json({ success: true });
 });
 
@@ -368,16 +368,16 @@ function checkDailyLimit(walletAddress, maxSessions = 5) {
   const today = new Date().toISOString().split('T')[0];
   const key = `${walletAddress}:${today}`;
   const sessions = dailySessions.get(key);
-  
+
   if (!sessions) {
     dailySessions.set(key, { date: today, count: 1 });
     return { allowed: true, remaining: maxSessions - 1 };
   }
-  
+
   if (sessions.count >= maxSessions) {
     return { allowed: false, remaining: 0 };
   }
-  
+
   sessions.count++;
   return { allowed: true, remaining: maxSessions - sessions.count };
 }
@@ -513,7 +513,11 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Payout server listening on http://localhost:${PORT}`);
-  console.log(`Survival reward tiers: 60s=100CKB, 300s=500CKB, 600s=1000CKB`);
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`Payout server listening on http://localhost:${PORT}`);
+    console.log(`Survival reward tiers: 60s=100CKB, 300s=500CKB, 600s=1000CKB`);
+  });
+}
+
+export default app;

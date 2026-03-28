@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CKB Arcade — Agent Dashboard</title>
+  <meta name="description" content="Real-time monitoring dashboard for CKB Arcade autonomous trading agents" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ─── Design Tokens ─────────────────────────────────────── */
+    :root {
+      --bg-primary: #0a0e1a;
+      --bg-secondary: #111827;
+      --bg-card: rgba(17, 24, 39, 0.7);
+      --bg-card-hover: rgba(17, 24, 39, 0.9);
+      --border: rgba(255, 255, 255, 0.06);
+      --border-accent: rgba(99, 102, 241, 0.3);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.15);
+      --green: #10b981;
+      --green-glow: rgba(16, 185, 129, 0.15);
+      --red: #ef4444;
+      --red-glow: rgba(239, 68, 68, 0.15);
+      --yellow: #f59e0b;
+      --yellow-glow: rgba(245, 158, 11, 0.15);
+      --cyan: #06b6d4;
+      --radius: 16px;
+      --radius-sm: 10px;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+
+    /* ─── Reset & Base ──────────────────────────────────────── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html {
+      font-size: 15px;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated gradient background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse at 20% 20%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(16, 185, 129, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 50%, rgba(6, 182, 212, 0.04) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ─── Layout ────────────────────────────────────────────── */
+    .container {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    /* ─── Header ────────────────────────────────────────────── */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2.5rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, var(--accent), var(--cyan));
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      font-weight: 800;
+      box-shadow: 0 0 20px var(--accent-glow);
+    }
+
+    .header h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--text-primary), var(--text-secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .header h1 span {
+      font-weight: 400;
+      opacity: 0.7;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 1rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border: 1px solid;
+    }
+
+    .status-badge.running {
+      color: var(--green);
+      background: var(--green-glow);
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+
+    .status-badge.halted {
+      color: var(--red);
+      background: var(--red-glow);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+
+    .status-badge.no_data {
+      color: var(--text-muted);
+      background: rgba(100, 116, 139, 0.1);
+      border-color: rgba(100, 116, 139, 0.2);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .status-badge.running .status-dot {
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ─── Cards Grid ────────────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-accent);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .card:hover::before {
+      opacity: 1;
+    }
+
+    .card-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
+
+    .card-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      font-family: var(--mono);
+      line-height: 1;
+      margin-bottom: 0.4rem;
+    }
+
+    .card-sub {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .card-value.positive { color: var(--green); }
+    .card-value.negative { color: var(--red); }
+    .card-value.neutral { color: var(--text-primary); }
+    .card-value.accent { color: var(--accent); }
+    .card-value.warning { color: var(--yellow); }
+
+    /* ─── Two-Column Layout ─────────────────────────────────── */
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    @media (max-width: 768px) {
+      .two-col { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+    }
+
+    .panel-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-secondary);
+      margin-bottom: 1.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .panel-title .icon {
+      font-size: 1rem;
+    }
+
+    /* ─── Score Bars ────────────────────────────────────────── */
+    .score-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }
+
+    .score-row:last-child { margin-bottom: 0; }
+
+    .score-label {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      min-width: 100px;
+    }
+
+    .score-bar-wrapper {
+      flex: 1;
+      margin: 0 1rem;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .score-bar {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .score-bar.green { background: linear-gradient(90deg, var(--green), #34d399); }
+    .score-bar.red { background: linear-gradient(90deg, var(--red), #f87171); }
+    .score-bar.accent { background: linear-gradient(90deg, var(--accent), #818cf8); }
+    .score-bar.yellow { background: linear-gradient(90deg, var(--yellow), #fbbf24); }
+    .score-bar.cyan { background: linear-gradient(90deg, var(--cyan), #22d3ee); }
+
+    .score-value {
+      font-size: 0.8rem;
+      font-family: var(--mono);
+      font-weight: 600;
+      color: var(--text-primary);
+      min-width: 48px;
+      text-align: right;
+    }
+
+    /* ─── Strategy Badge ────────────────────────────────────── */
+    .strategy-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: var(--radius-sm);
+      margin-bottom: 0.75rem;
+    }
+
+    .strategy-row:last-child { margin-bottom: 0; }
+
+    .strategy-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .strategy-value {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .strategy-value.aggressive { color: var(--red); }
+    .strategy-value.conservative { color: var(--cyan); }
+
+    /* ─── Decision Log ──────────────────────────────────────── */
+    .log-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .log-table th {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .log-table td {
+      font-size: 0.8rem;
+      font-family: var(--mono);
+      padding: 0.6rem 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+      color: var(--text-secondary);
+    }
+
+    .log-table tr:hover td {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .log-table .action-play { color: var(--green); font-weight: 600; }
+    .log-table .action-wait { color: var(--yellow); font-weight: 600; }
+    .log-table .action-stop { color: var(--red); font-weight: 600; }
+
+    .log-table .delta-pos { color: var(--green); }
+    .log-table .delta-neg { color: var(--red); }
+
+    .log-scroll {
+      max-height: 320px;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.1) transparent;
+    }
+
+    /* ─── No Data State ─────────────────────────────────────── */
+    .no-data {
+      text-align: center;
+      padding: 5rem 2rem;
+    }
+
+    .no-data-icon {
+      font-size: 4rem;
+      margin-bottom: 1.5rem;
+      opacity: 0.5;
+    }
+
+    .no-data h2 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+    }
+
+    .no-data p {
+      color: var(--text-muted);
+      max-width: 400px;
+      margin: 0 auto;
+      line-height: 1.6;
+    }
+
+    .no-data code {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--accent);
+    }
+
+    /* ─── Footer ────────────────────────────────────────────── */
+    .footer {
+      text-align: center;
+      padding: 2rem 0 1rem;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+    }
+
+    .footer .refresh-info {
+      color: var(--text-secondary);
+      font-family: var(--mono);
+    }
+
+    /* ─── Animations ────────────────────────────────────────── */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .animate-in {
+      animation: fadeIn 0.4s ease-out;
+    }
+
+    .card { animation: fadeIn 0.5s ease-out backwards; }
+    .card:nth-child(1) { animation-delay: 0.05s; }
+    .card:nth-child(2) { animation-delay: 0.1s; }
+    .card:nth-child(3) { animation-delay: 0.15s; }
+    .card:nth-child(4) { animation-delay: 0.2s; }
+    .card:nth-child(5) { animation-delay: 0.25s; }
+    .card:nth-child(6) { animation-delay: 0.3s; }
+  </style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div class="no-data">
+      <div class="no-data-icon">⏳</div>
+      <h2>Loading agent data…</h2>
+    </div>
+  </div>
+
+  <script>
+    const API_URL = window.location.origin + '/api/agent';
+    const POLL_INTERVAL = 2000; // 2s
+
+    function fmt(n, decimals = 1) {
+      if (n == null || isNaN(n)) return '—';
+      return Number(n).toFixed(decimals);
+    }
+
+    function fmtPct(n) { return fmt(n, 1) + '%'; }
+
+    function fmtTime(iso) {
+      if (!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function pnlClass(val) {
+      if (val > 0) return 'positive';
+      if (val < 0) return 'negative';
+      return 'neutral';
+    }
+
+    function scoreBarColor(metric) {
+      const colors = {
+        emaWinRate: 'green',
+        recentWinRate: 'green',
+        momentum: 'accent',
+        volatility: 'yellow',
+        confidence: 'cyan',
+        streakHeat: 'red',
+        kellyFraction: 'accent',
+      };
+      return colors[metric] || 'accent';
+    }
+
+    function renderNoData() {
+      return `
+        <div class="header animate-in">
+          <div class="header-left">
+            <div class="logo">⚡</div>
+            <h1>CKB Arcade <span>Agent Dashboard</span></h1>
+          </div>
+          <div class="status-badge no_data">
+            <div class="status-dot"></div>
+            No Data
+          </div>
+        </div>
+        <div class="no-data animate-in">
+          <div class="no-data-icon">🤖</div>
+          <h2>No agent data yet</h2>
+          <p>Start the agent runner to see live data here.<br/>
+          Run <code>npm run run:agent</code> in another terminal.</p>
+        </div>
+      `;
+    }
+
+    function renderDashboard(data) {
+      const { agent, scoring, summary, effectiveStrategy, status } = data;
+      if (!agent || !summary) return renderNoData();
+
+      const net = summary.netResult;
+      const netSign = net >= 0 ? '+' : '';
+      const pnl = net >= 0 ? summary.profitPercent : -summary.lossPercent;
+      const pnlSign = pnl >= 0 ? '+' : '';
+
+      // Last 10 decisions (newest first)
+      const recentLog = (agent.decisionLog || []).slice(-10).reverse();
+
+      return `
+        <!-- Header -->
+        <div class="header animate-in">
+          <div class="header-left">
+            <div class="logo">⚡</div>
+            <h1>CKB Arcade <span>Agent Dashboard</span></h1>
+          </div>
+          <div class="status-badge ${status}">
+            <div class="status-dot"></div>
+            ${status === 'running' ? 'Live' : status === 'halted' ? 'Halted' : 'Offline'}
+          </div>
+        </div>
+
+        <!-- Stats Cards -->
+        <div class="stats-grid">
+          <div class="card">
+            <div class="card-label">Balance</div>
+            <div class="card-value neutral">${fmt(agent.balance, 2)}</div>
+            <div class="card-sub">CKB • started at ${fmt(agent.config.initialBalance, 0)}</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Profit / Loss</div>
+            <div class="card-value ${pnlClass(net)}">${netSign}${fmt(net, 2)}</div>
+            <div class="card-sub">CKB • ${pnlSign}${fmtPct(pnl)}</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Games Played</div>
+            <div class="card-value accent">${summary.gamesPlayed}</div>
+            <div class="card-sub">${agent.wins}W / ${agent.losses}L</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Win Rate</div>
+            <div class="card-value ${summary.winRate >= 50 ? 'positive' : 'negative'}">${fmtPct(summary.winRate)}</div>
+            <div class="card-sub">EMA: ${scoring ? fmtPct(scoring.emaWinRate * 100) : '—'}</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Strategy</div>
+            <div class="card-value" style="font-size:1.2rem;">
+              <span class="strategy-value ${effectiveStrategy}">${effectiveStrategy}</span>
+            </div>
+            <div class="card-sub">config: ${agent.config.strategy}</div>
+          </div>
+
+          <div class="card">
+            <div class="card-label">Kelly Bet Size</div>
+            <div class="card-value accent">${scoring ? fmtPct(scoring.kellyFraction * 100) : '—'}</div>
+            <div class="card-sub">of balance per round</div>
+          </div>
+        </div>
+
+        <!-- Scoring + Strategy -->
+        <div class="two-col">
+          <!-- Scoring Panel -->
+          <div class="panel">
+            <div class="panel-title"><span class="icon">📊</span> Performance Scores</div>
+            ${scoring ? `
+              ${scoreRow('EMA Win Rate', scoring.emaWinRate, 'emaWinRate')}
+              ${scoreRow('Recent Win Rate', scoring.recentWinRate, 'recentWinRate')}
+              ${scoreRow('Momentum', (scoring.momentum + 1) / 2, 'momentum', (scoring.momentum >= 0 ? '+' : '') + fmt(scoring.momentum * 100, 0) + '%')}
+              ${scoreRow('Volatility', scoring.volatility, 'volatility')}
+              ${scoreRow('Confidence', scoring.confidence, 'confidence')}
+              ${scoreRow('Streak Heat', Math.abs(scoring.streakHeat), 'streakHeat', (scoring.streakHeat >= 0 ? '🔥 ' : '❄️ ') + fmt(Math.abs(scoring.streakHeat) * 100, 0) + '%')}
+            ` : '<div style="color:var(--text-muted)">No scoring data yet</div>'}
+          </div>
+
+          <!-- Strategy Panel -->
+          <div class="panel">
+            <div class="panel-title"><span class="icon">🧠</span> AI Insights</div>
+            <div class="strategy-row">
+              <div class="strategy-label" style="flex:1">Effective Strategy</div>
+              <div class="strategy-value ${effectiveStrategy}">${effectiveStrategy}</div>
+            </div>
+            <div class="strategy-row">
+              <div class="strategy-label" style="flex:1">Stop Loss</div>
+              <div style="font-family:var(--mono);font-size:0.85rem;color:var(--red)">${fmtPct(agent.config.stopLoss * 100)}</div>
+            </div>
+            <div class="strategy-row">
+              <div class="strategy-label" style="flex:1">Profit Target</div>
+              <div style="font-family:var(--mono);font-size:0.85rem;color:var(--green)">${fmtPct(agent.config.profitTarget * 100)}</div>
+            </div>
+            ${agent.halted ? `
+              <div class="strategy-row" style="border:1px solid rgba(239,68,68,0.2);background:var(--red-glow)">
+                <div class="strategy-label" style="flex:1;color:var(--red)">Halt Reason</div>
+                <div style="font-size:0.75rem;color:var(--text-secondary);max-width:200px;text-align:right">${agent.haltReason || 'Unknown'}</div>
+              </div>
+            ` : ''}
+            ${scoring ? `
+              <div style="margin-top:1rem;padding:0.75rem 1rem;background:rgba(255,255,255,0.03);border-radius:var(--radius-sm);font-size:0.75rem;color:var(--text-secondary);line-height:1.6">
+                ${scoring.explanation}
+              </div>
+            ` : ''}
+          </div>
+        </div>
+
+        <!-- Decision Log -->
+        <div class="panel animate-in">
+          <div class="panel-title"><span class="icon">📋</span> Recent Decisions</div>
+          ${recentLog.length > 0 ? `
+            <div class="log-scroll">
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Action</th>
+                    <th>Result</th>
+                    <th>Balance</th>
+                    <th>Game</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${recentLog.map(entry => {
+                    const delta = entry.balanceAfter - entry.balanceBefore;
+                    const deltaSign = delta >= 0 ? '+' : '';
+                    return `
+                      <tr>
+                        <td>${fmtTime(entry.timestamp)}</td>
+                        <td class="action-${entry.action.toLowerCase()}">${entry.action}</td>
+                        <td class="${delta >= 0 ? 'delta-pos' : 'delta-neg'}">${deltaSign}${fmt(delta, 2)}</td>
+                        <td>${fmt(entry.balanceAfter, 2)}</td>
+                        <td style="color:var(--text-muted)">${entry.gameState?.gameId || '—'}</td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : '<div style="color:var(--text-muted);text-align:center;padding:2rem">No decisions recorded yet</div>'}
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+          <div class="refresh-info">Auto-refresh every ${POLL_INTERVAL / 1000}s • Last update: ${fmtTime(data.timestamp)}</div>
+          <div style="margin-top:0.25rem">CKB Arcade Agent Engine</div>
+        </div>
+      `;
+    }
+
+    function scoreRow(label, value, metric, displayValue) {
+      const pct = Math.max(0, Math.min(100, (value || 0) * 100));
+      const display = displayValue || fmtPct(pct);
+      const color = scoreBarColor(metric);
+      return `
+        <div class="score-row">
+          <div class="score-label">${label}</div>
+          <div class="score-bar-wrapper">
+            <div class="score-bar ${color}" style="width:${pct}%"></div>
+          </div>
+          <div class="score-value">${display}</div>
+        </div>
+      `;
+    }
+
+    // ─── Polling Loop ─────────────────────────────────────────
+    async function fetchAndRender() {
+      try {
+        const res = await fetch(API_URL);
+        const data = await res.json();
+        document.getElementById('app').innerHTML = renderDashboard(data);
+      } catch (err) {
+        console.error('Fetch failed:', err);
+      }
+    }
+
+    // Initial fetch + polling
+    fetchAndRender();
+    setInterval(fetchAndRender, POLL_INTERVAL);
+  </script>
+</body>
+</html>

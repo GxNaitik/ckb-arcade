@@ -1,0 +1,27 @@
+{
+  "name": "ckb-arcade-agent-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous agent engine for CKB Arcade — manages strategy, risk, and game decisions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "run:agent": "tsx src/run.ts",
+    "run:live": "tsx src/run-live.ts",
+    "dashboard": "tsx src/dashboard-server.ts",
+    "test": "tsx src/__tests__/agent.test.ts"
+  },
+  "dependencies": {
+    "@ckb-ccc/core": "^1.12.2",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.11.0"
+  }
+}

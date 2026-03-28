@@ -355,9 +355,9 @@ export function CoinFlip({
         onClick={handleFlip}
         disabled={isFlipping}
         className={`
-          relative group overflow-hidden rounded-2xl px-12 py-4 font-black text-2xl uppercase tracking-widest transition-all
+          relative group overflow-hidden rounded-xl px-12 py-4 font-black text-2xl uppercase tracking-widest transition-all
           ${!isConnected
-            ? 'bg-gray-800 text-gray-300 cursor-pointer border border-gray-700'
+            ? 'bg-primary text-black hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(57,255,20,0.4)] border border-green-400'
             : isFlipping
               ? 'bg-gray-900 text-yellow-500 cursor-wait border border-yellow-900'
               : 'bg-purple-500 text-white hover:scale-105 active:scale-95 shadow-[0_0_30px_rgba(168,85,247,0.4)] border border-purple-400'

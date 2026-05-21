@@ -3,6 +3,7 @@ import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Dice1, Dice2, Dice3, Dice4, Dice5, Dice6, Trophy, Frown, Zap } from 'lucide-react';
 import { getAudioContext } from '../../utils/audio';
 import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { sendWithRetry } from '../../utils/sendWithRetry';
 import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Dice rolling sound effect
@@ -138,19 +139,9 @@ export function DiceRoll({
         return;
       }
 
-      const outputDataHex = '0x';
-      const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: outputDataHex });
-      const finalBetAmount = Math.max(betAmount, minBetCkb).toString();
-      const tx = ccc.Transaction.from({
-        outputs: [{ lock: toLock }],
-        outputsData: [outputDataHex],
-      });
-      tx.outputs.forEach((output) => {
-        output.capacity = ccc.fixedPointFrom(finalBetAmount);
-      });
-      await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, 2000);
-      const txHash = await signer.sendTransaction(tx);
+      const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: '0x' });
+      const finalBetAmount = Math.max(betAmount, minBetCkb);
+      const txHash = await sendWithRetry({ signer, toLock, amountCkb: finalBetAmount });
       onTx?.(txHash);
 
       // Animate dice rolling

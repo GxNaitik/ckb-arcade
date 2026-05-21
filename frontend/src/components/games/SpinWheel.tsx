@@ -3,6 +3,7 @@ import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Zap, PartyPopper, Frown, Trophy } from 'lucide-react';
 import { getAudioContext } from '../../utils/audio';
 import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { sendWithRetry } from '../../utils/sendWithRetry';
 import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Spinning sound effect
@@ -151,19 +152,9 @@ export function SpinWheel({
                 return;
             }
 
-            const outputDataHex = '0x';
-            const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: outputDataHex });
-            const betAmountCkb = Math.max(requestedBetCkb, minBetCkb).toString();
-            const tx = ccc.Transaction.from({
-                outputs: [{ lock: toLock }],
-                outputsData: [outputDataHex],
-            });
-            tx.outputs.forEach((output) => {
-                output.capacity = ccc.fixedPointFrom(betAmountCkb);
-            });
-            await tx.completeInputsByCapacity(signer);
-            await tx.completeFeeBy(signer, 2000);
-            const txHash = await signer.sendTransaction(tx);
+            const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: '0x' });
+            const finalBetCkb = Math.max(requestedBetCkb, minBetCkb);
+            const txHash = await sendWithRetry({ signer, toLock, amountCkb: finalBetCkb });
             onTx?.(txHash);
 
             // Determine result — provably fair or demo mode

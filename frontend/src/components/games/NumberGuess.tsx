@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Trophy, Frown, Zap } from 'lucide-react';
 import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { sendWithRetry } from '../../utils/sendWithRetry';
 import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 interface NumberGuessProps {
@@ -90,19 +91,9 @@ export function NumberGuess({
         return;
       }
 
-      const outputDataHex = '0x';
-      const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: outputDataHex });
-      const finalBetAmount = Math.max(betAmount, minBetCkb).toString();
-      const tx = ccc.Transaction.from({
-        outputs: [{ lock: toLock }],
-        outputsData: [outputDataHex],
-      });
-      tx.outputs.forEach((output) => {
-        output.capacity = ccc.fixedPointFrom(finalBetAmount);
-      });
-      await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, 2000);
-      const txHash = await signer.sendTransaction(tx);
+      const minBetCkb = minCellCapacityCkb({ lock: toLock, dataHex: '0x' });
+      const finalBetAmount = Math.max(betAmount, minBetCkb);
+      const txHash = await sendWithRetry({ signer, toLock, amountCkb: finalBetAmount });
       onTx?.(txHash);
 
       // Run commit-reveal to get provably fair outcome

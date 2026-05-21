@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useRef, useCallback } from 'react';
 import { LaneManager, TrackSpawner, CameraSystem, TrackSegmentPool } from './LaneSystem';
 import type { ObstacleInstance, CoinInstance } from './LaneSystem';
@@ -73,7 +74,7 @@ export const useLaneSystem = () => {
       acc[coin.pattern || 'single'] = (acc[coin.pattern || 'single'] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
+
     return {
       totalCoins: coins.length,
       totalValue,

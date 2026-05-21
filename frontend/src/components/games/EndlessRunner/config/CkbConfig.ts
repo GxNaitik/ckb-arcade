@@ -8,16 +8,16 @@ export const CKB_CONFIG = {
   ENTRY_FEE_CKB: 199, // Entry fee in CKB
   REWARD_CKB: 400, // Victory reward in CKB
   COIN_VALUE_CKB: 10, // Value per collected coin in CKB
-  
+
   // Transaction Fees
   TRANSACTION_FEE_RATE: 0.001, // 0.1% fee rate
-  
+
   // Contract Addresses (replace with actual addresses)
   GAME_CONTRACT: {
     TESTNET: 'ckb1qyq...replace-with-testnet-contract-address',
     MAINNET: 'ckb1qyq...replace-with-mainnet-contract-address',
   },
-  
+
   // Network Configuration
   NETWORK: {
     TESTNET: {
@@ -33,34 +33,34 @@ export const CKB_CONFIG = {
       explorerUrl: 'https://explorer.nervos.org',
     },
   },
-  
+
   // Transaction Monitoring
   MONITORING: {
     POLL_INTERVAL: 5000, // 5 seconds
     TIMEOUT: 120000, // 2 minutes
     MAX_RETRIES: 3,
   },
-  
+
   // Game Session Limits
   SESSION: {
     MAX_DURATION: 24 * 60 * 60 * 1000, // 24 hours in milliseconds
     MIN_DURATION: 30 * 1000, // 30 seconds minimum
   },
-  
+
   // Anti-Cheat Settings
   ANTI_CHEAT: {
     ENABLED: true,
     MAX_WIN_RATE: 45, // Maximum 45% win rate
     SUSPICIOUS_THRESHOLD: 80, // Win rate above 80% triggers review
   },
-  
+
   // UI Settings
   UI: {
     TRANSACTION_HISTORY_LIMIT: 50, // Maximum transactions to display
     BALANCE_DECIMALS: 8, // Maximum decimal places for balance display
     REFRESH_INTERVAL: 5000, // Balance refresh interval in milliseconds
   },
-  
+
   // Storage Keys
   STORAGE: {
     TRANSACTIONS: 'ckb_game_transactions',
@@ -68,10 +68,10 @@ export const CKB_CONFIG = {
     SETTINGS: 'ckb_game_settings',
     STATISTICS: 'ckb_game_statistics',
   },
-  
+
   // Error Messages
   ERRORS: {
-    INSUFFICIENT_BALANCE: (required: number, available: number) => 
+    INSUFFICIENT_BALANCE: (required: number, available: number) =>
       `Insufficient balance. Need ${required} CKB, have ${available} CKB`,
     WALLET_NOT_CONNECTED: 'Wallet not connected. Please connect your wallet to play.',
     TRANSACTION_FAILED: 'Transaction failed. Please try again.',
@@ -79,21 +79,21 @@ export const CKB_CONFIG = {
     SESSION_EXPIRED: 'Game session expired. Please start a new game.',
     CONTRACT_ERROR: 'Contract execution failed. Please contact support.',
   },
-  
+
   // Success Messages
   SUCCESS: {
     TRANSACTION_CONFIRMED: 'Transaction confirmed successfully!',
     GAME_STARTED: 'Game started! Entry fee paid.',
     REWARD_CLAIMED: 'Reward claimed successfully!',
   },
-  
+
   // Transaction Types
   TRANSACTION_TYPES: {
     ENTRY_FEE: 'entry_fee',
     REWARD: 'reward',
     COIN_COLLECTION: 'coin_collection',
   } as const,
-  
+
   // Game States
   GAME_STATES: {
     IDLE: 'idle',
@@ -101,7 +101,7 @@ export const CKB_CONFIG = {
     PAUSED: 'paused',
     GAMEOVER: 'gameover',
   } as const,
-  
+
   // Transaction States
   TRANSACTION_STATES: {
     PENDING: 'pending',
@@ -179,9 +179,9 @@ export function formatTxHash(hash: string, startChars: number = 8, endChars: num
 export function validateGameSession(startTime: number, endTime?: number): boolean {
   const now = Date.now();
   const duration = endTime ? endTime - startTime : now - startTime;
-  
-  return duration >= CKB_CONFIG.SESSION.MIN_DURATION && 
-         duration <= CKB_CONFIG.SESSION.MAX_DURATION;
+
+  return duration >= CKB_CONFIG.SESSION.MIN_DURATION &&
+    duration <= CKB_CONFIG.SESSION.MAX_DURATION;
 }
 
 /**
@@ -194,10 +194,12 @@ export function isSuspiciousWinRate(winRate: number): boolean {
 /**
  * Get error message by key
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function getErrorMessage(key: keyof typeof CKB_CONFIG.ERRORS, ...args: any[]): string {
   const message = CKB_CONFIG.ERRORS[key];
   if (typeof message === 'function') {
     // Type assertion to handle function call with spread arguments
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return (message as (...args: any[]) => string)(...args);
   }
   return message;

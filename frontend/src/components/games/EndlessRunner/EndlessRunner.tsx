@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
+import { getAudioContext } from '../../../utils/audio';
 import { useGameLoop } from './engine/GameEngine';
 import { useGameEconomy } from './systems/useGameEconomy';
 
@@ -63,7 +64,8 @@ interface DinoState {
 // Sound effects using Web Audio API
 const playCheckpointSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 
@@ -87,7 +89,8 @@ const playCheckpointSound = () => {
 
 const playCollisionSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 
@@ -128,6 +131,7 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
   onConnect,
   signer,
   onTx: _onTx,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onWin: _onWin,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -181,6 +185,7 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
 
   // Game economy system
   const gameEconomy = useGameEconomy(_gameAddress, signer);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/no-explicit-any
   const [_transactions, setTransactions] = useState<any[]>([]);
 
   // Load transaction history
@@ -209,6 +214,7 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
   /**
    * Main game frame update - Chrome Dino Style
    */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function handleGameFrame(_deltaTime: number, _gameTime: number) {
     if (gameStatusRef.current !== 'playing') return;
 
@@ -735,7 +741,7 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
         rewardAmount: 0,
       }));
     }
-  }, [gameLoop, walletAddress, gameEconomy]);
+  }, [gameLoop, walletAddress, gameEconomy, _onTx]);
 
   /**
    * Start the game - payment confirmed, waiting for first jump
@@ -809,7 +815,7 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
 
     // Render initial frame but don't start game loop yet
     renderFrame();
-  }, [walletAddress, onConnect, gameEconomy]);
+  }, [walletAddress, onConnect, gameEconomy, _onTx, renderFrame]);
 
   /**
    * Handle player input

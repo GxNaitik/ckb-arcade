@@ -1,3 +1,4 @@
+/* eslint-disable prefer-const, no-case-declarations, @typescript-eslint/no-explicit-any */
 /**
  * Lane system configuration and types
  */
@@ -278,11 +279,11 @@ export class DeterministicCoinSpawner {
   ): CoinInstance[] {
     const coins: CoinInstance[] = [];
     const startOffset = 50 + (segmentLength - 100) * this.seededRandom();
-    
+
     for (let i = 0; i < pattern.coinCount; i++) {
       let laneIndex = this.seededRandom() * pattern.lanes.length;
       let lane = pattern.lanes[Math.floor(laneIndex)];
-      
+
       let z = startZ + startOffset + (i * pattern.spacing);
       let x = 0; // Will be set by lane system
       let y = -20 + this.seededRandom() * 40; // Random height
@@ -293,19 +294,19 @@ export class DeterministicCoinSpawner {
           // Straight line in same lane
           x = 0; // Lane system will set this
           break;
-        
+
         case 'cluster':
           // Tight group with slight variations
           x = (this.seededRandom() - 0.5) * 30;
           y = -10 + this.seededRandom() * 20;
           break;
-        
+
         case 'zigzag':
           // Alternating lanes
           lane = pattern.lanes[i % pattern.lanes.length];
           x = 0; // Lane system will set this
           break;
-        
+
         case 'rainbow':
           // Arc pattern with height variation
           const arcProgress = i / pattern.coinCount;
@@ -414,7 +415,7 @@ export class LaneManager {
   isPositionInLane(x: number, laneId: number): boolean {
     const lane = this.getLane(laneId);
     if (!lane) return false;
-    
+
     const halfWidth = lane.width / 2;
     return x >= lane.centerX - halfWidth && x <= lane.centerX + halfWidth;
   }
@@ -476,7 +477,7 @@ export class TrackSegmentPool {
    */
   acquire(): TrackSegment {
     let segment = this.pool.pop();
-    
+
     // If pool is empty, create new segment
     if (!segment) {
       segment = {
@@ -494,7 +495,7 @@ export class TrackSegmentPool {
     segment.isActive = true;
     segment.obstacles = [];
     segment.coins = [];
-    
+
     this.activeSegments.push(segment);
     return segment;
   }
@@ -506,13 +507,13 @@ export class TrackSegmentPool {
     const index = this.activeSegments.indexOf(segment);
     if (index > -1) {
       this.activeSegments.splice(index, 1);
-      
+
       // Reset segment
       segment.isActive = false;
       segment.z = 0;
       segment.obstacles = [];
       segment.coins = [];
-      
+
       this.pool.push(segment);
     }
   }
@@ -529,7 +530,7 @@ export class TrackSegmentPool {
    */
   releaseBehindSegments(playerZ: number, maxDistance: number = 2000): void {
     const segmentsToRelease: TrackSegment[] = [];
-    
+
     for (const segment of this.activeSegments) {
       if (segment.z < playerZ - maxDistance) {
         segmentsToRelease.push(segment);
@@ -579,7 +580,7 @@ export class TrackSpawner {
     const distanceComponent = (distance / 10000) * 0.5;
     const timeComponent = (time / 30000) * 0.3;
     const difficulty = 1.0 + distanceComponent + timeComponent;
-    
+
     return Math.min(difficulty, 3.0); // Cap at 3x difficulty
   }
 
@@ -597,24 +598,24 @@ export class TrackSpawner {
    */
   selectObstacleType(difficulty: number): ObstacleType {
     const availableTypes = this.getAvailableObstacleTypes(difficulty);
-    
+
     if (availableTypes.length === 0) {
       return OBSTACLE_TYPES.barrier; // Fallback
     }
 
     // Calculate total weight
     const totalWeight = availableTypes.reduce((sum, type) => sum + type.spawnWeight, 0);
-    
+
     // Weighted random selection
     let random = Math.random() * totalWeight;
-    
+
     for (const type of availableTypes) {
       random -= type.spawnWeight;
       if (random <= 0) {
         return type;
       }
     }
-    
+
     return availableTypes[availableTypes.length - 1]; // Fallback
   }
 
@@ -644,7 +645,7 @@ export class TrackSpawner {
   private spawnSegment(z: number): void {
     const segment = this.segmentPool.acquire();
     segment.z = z;
-    
+
     // Determine segment type based on difficulty
     const rand = Math.random();
     if (this.difficulty > 2.0 && rand < 0.1) {
@@ -672,16 +673,16 @@ export class TrackSpawner {
       500, // Minimum 500ms between spawns
       2000 / this.difficulty // Base 2 seconds, divided by difficulty
     );
-    
+
     // Calculate max obstacles for this segment
     const maxObstacles = Math.min(
       5, // Max 5 obstacles per segment
       Math.floor(segment.length / spawnInterval)
     );
-    
+
     // Generate obstacles
     let currentZ = 100; // Start 100 units into segment
-    
+
     while (currentZ < segment.length - 100 && segment.obstacles.length < maxObstacles) {
       // Decide if we should spawn an obstacle at this position
       if (Math.random() < 0.7) { // 70% chance to spawn
@@ -690,16 +691,16 @@ export class TrackSpawner {
           segment.obstacles.push(obstacle);
         }
       }
-      
+
       currentZ += spawnInterval + Math.random() * 200; // Add some randomness
     }
 
     // Generate CKB coins using deterministic patterns
     this.coinSpawner.updateSeed(segment.id); // Ensure unique pattern per segment
-    
+
     // Select pattern based on difficulty
     const selectedPattern = this.coinSpawner.selectPattern(this.difficulty);
-    
+
     // Generate coin pattern
     const currentTime = Date.now();
     const patternCoins = this.coinSpawner.generatePattern(
@@ -708,18 +709,18 @@ export class TrackSpawner {
       segment.length,
       currentTime
     );
-    
+
     // Update coin positions based on lane system
     for (const coin of patternCoins) {
       coin.x = this.laneManager.getLaneX(coin.lane) + coin.x;
       coin.z = segment.z + (coin.z - segment.z); // Adjust relative to segment
-      
+
       // Special handling for zigzag pattern
       if (selectedPattern.id === 'zigzag') {
         coin.lane = selectedPattern.lanes[coin.patternIndex! % selectedPattern.lanes.length];
         coin.x = this.laneManager.getLaneX(coin.lane);
       }
-      
+
       segment.coins.push(coin);
     }
   }
@@ -731,11 +732,11 @@ export class TrackSpawner {
     const obstacleType = this.selectObstacleType(this.difficulty);
     const lane = Math.floor(Math.random() * 3);
     const laneX = this.laneManager.getLaneX(lane);
-    
+
     // Add some lateral randomness within lane
     const lateralOffset = (Math.random() - 0.5) * 30;
     const x = laneX + lateralOffset;
-    
+
     const obstacle: ObstacleInstance = {
       id: `obstacle_${this.nextObstacleId++}`,
       type: obstacleType.id as any,
@@ -755,7 +756,7 @@ export class TrackSpawner {
       spawnWeight: obstacleType.spawnWeight,
       minDifficulty: obstacleType.minDifficulty,
     };
-    
+
     return obstacle;
   }
 
@@ -765,27 +766,27 @@ export class TrackSpawner {
   private updateActiveSegments(speed: number): void {
     const activeSegments = this.segmentPool.getActiveSegments();
     const deltaTime = 16; // Assume 60 FPS (16ms per frame)
-    
+
     for (const segment of activeSegments) {
       segment.z -= speed * 0.016;
-      
+
       // Update obstacles and coins relative to segment
       for (const obstacle of segment.obstacles) {
         obstacle.z -= speed * 0.016;
-        
+
         // Update moving obstacles
         if (!obstacle.isStatic && obstacle.speed) {
           const moveSpeed = obstacle.speed * (deltaTime / 1000);
-          
+
           // Simple back and forth movement
           const time = Date.now() / 1000;
           const movement = Math.sin(time * 2) * moveSpeed * 50;
-          
+
           const targetX = this.laneManager.getLaneX(obstacle.lane) + movement;
           obstacle.x = targetX;
         }
       }
-      
+
       for (const coin of segment.coins) {
         coin.z -= speed * 0.016;
       }
@@ -798,11 +799,11 @@ export class TrackSpawner {
   getObstacles(): ObstacleInstance[] {
     const activeSegments = this.segmentPool.getActiveSegments();
     const obstacles: ObstacleInstance[] = [];
-    
+
     for (const segment of activeSegments) {
       obstacles.push(...segment.obstacles);
     }
-    
+
     return obstacles;
   }
 
@@ -812,11 +813,11 @@ export class TrackSpawner {
   getCoins(): CoinInstance[] {
     const activeSegments = this.segmentPool.getActiveSegments();
     const coins: CoinInstance[] = [];
-    
+
     for (const segment of activeSegments) {
       coins.push(...segment.coins);
     }
-    
+
     return coins;
   }
 
@@ -825,7 +826,7 @@ export class TrackSpawner {
    */
   collectCoin(coinId: string): void {
     const activeSegments = this.segmentPool.getActiveSegments();
-    
+
     for (const segment of activeSegments) {
       const coinIndex = segment.coins.findIndex(coin => coin.id === coinId);
       if (coinIndex > -1) {
@@ -840,7 +841,7 @@ export class TrackSpawner {
    */
   removeObstacle(obstacleId: string): void {
     const activeSegments = this.segmentPool.getActiveSegments();
-    
+
     for (const segment of activeSegments) {
       const obstacleIndex = segment.obstacles.findIndex(obs => obs.id === obstacleId);
       if (obstacleIndex > -1) {
@@ -866,7 +867,7 @@ export class TrackSpawner {
     for (const segment of [...activeSegments]) {
       this.segmentPool.release(segment);
     }
-    
+
     this.lastSpawnZ = 0;
     this.difficulty = 1.0;
   }
@@ -893,7 +894,7 @@ export class CameraSystem {
    */
   update(playerZ: number): void {
     this.targetZ = playerZ - this.followDistance;
-    
+
     // Smooth camera follow
     const smoothing = 0.1;
     this.cameraZ += (this.targetZ - this.cameraZ) * smoothing;
@@ -927,7 +928,7 @@ export class CameraSystem {
 
     const perspective = 1000; // Perspective distance
     const scale = perspective / (perspective + relZ);
-    
+
     const screenX = relX * scale + canvasWidth / 2;
     const screenY = -relY * scale + canvasHeight * 0.7; // 70% down the screen
 

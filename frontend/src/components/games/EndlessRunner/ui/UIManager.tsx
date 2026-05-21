@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components, @typescript-eslint/no-explicit-any */
 /**
  * UI Manager Component
  * Orchestrates all UI screens and manages state flow

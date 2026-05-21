@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Dice1, Dice2, Dice3, Dice4, Dice5, Dice6, Trophy, Frown, Zap } from 'lucide-react';
+import { getAudioContext } from '../../utils/audio';
+import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Dice rolling sound effect
 const playDiceRollSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    // Create multiple short noise bursts to simulate dice shaking
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     for (let i = 0; i < 8; i++) {
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
@@ -22,7 +25,7 @@ const playDiceRollSound = () => {
       oscillator.start(audioContext.currentTime + i * 0.15);
       oscillator.stop(audioContext.currentTime + i * 0.15 + 0.1);
     }
-  } catch (e) {
+  } catch (_e) {
     console.log('Audio not supported');
   }
 };
@@ -30,8 +33,9 @@ const playDiceRollSound = () => {
 // Win sound effect
 const playWinSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
+    const notes = [523.25, 659.25, 783.99, 1046.50];
     notes.forEach((freq, i) => {
       const oscillator = audioContext.createOscillator();
       const gainNode = audioContext.createGain();
@@ -43,7 +47,7 @@ const playWinSound = () => {
       oscillator.start(audioContext.currentTime + i * 0.1);
       oscillator.stop(audioContext.currentTime + i * 0.1 + 0.3);
     });
-  } catch (e) {
+  } catch (_e) {
     console.log('Audio not supported');
   }
 };
@@ -88,12 +92,13 @@ export function DiceRoll({
   const [errorText, setErrorText] = useState<string>('');
   const [payoutTxHash, setPayoutTxHash] = useState<string>('');
   const [payoutAmountCkb, setPayoutAmountCkb] = useState<number | null>(null);
+  const [fairnessProof, setFairnessProof] = useState<FairnessProof | null>(null);
 
   const [isRolling, setIsRolling] = useState(false);
   const [playerDice, setPlayerDice] = useState<number>(1);
   const [houseDice, setHouseDice] = useState<number>(1);
   const [selectedBet, setSelectedBet] = useState<'higher' | 'lower' | 'equal'>('higher');
-  const [betAmount, setBetAmount] = useState<number>(50);
+  const [betAmount, setBetAmount] = useState<number>(100);
   const [status, setStatus] = useState<'idle' | 'rolling' | 'success' | 'lost' | 'error'>('idle');
   const [showModal, setShowModal] = useState(false);
 
@@ -119,6 +124,7 @@ export function DiceRoll({
       setErrorText('');
       setPayoutTxHash('');
       setPayoutAmountCkb(null);
+      setFairnessProof(null);
 
       let toLock: ccc.Script;
       try {
@@ -143,7 +149,7 @@ export function DiceRoll({
         output.capacity = ccc.fixedPointFrom(finalBetAmount);
       });
       await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, 2000); // Increased fee rate to avoid RBF issues
+      await tx.completeFeeBy(signer, 2000);
       const txHash = await signer.sendTransaction(tx);
       onTx?.(txHash);
 
@@ -159,40 +165,59 @@ export function DiceRoll({
         }
       }, 100);
 
-      // Wait for animation
-      await new Promise(r => setTimeout(r, 2500));
+      // Run commit-reveal in parallel with animation
+      const API_BASE = import.meta.env.VITE_API_BASE || '';
+      let finalPlayerDice: number;
+      let finalHouseDice: number;
+      let won: boolean;
+      let winAmount: number;
 
-      // Final dice results
-      const finalPlayerDice = Math.floor(Math.random() * 6) + 1;
-      const finalHouseDice = Math.floor(Math.random() * 6) + 1;
+      if (API_BASE) {
+        // Provably fair mode
+        const crResult = await playCommitReveal({
+          gameType: 'dice-roll',
+          betAmount,
+          betTxHash: txHash,
+          playerChoice: selectedBet,
+        });
+
+        const details = crResult.outcome.details as { playerDice: number; houseDice: number };
+        finalPlayerDice = details.playerDice;
+        finalHouseDice = details.houseDice;
+        won = crResult.outcome.won;
+        winAmount = crResult.outcome.winAmount;
+        setFairnessProof(crResult.proof);
+      } else {
+        // Demo mode
+        finalPlayerDice = Math.floor(Math.random() * 6) + 1;
+        finalHouseDice = Math.floor(Math.random() * 6) + 1;
+        won = false;
+        if (selectedBet === 'higher' && finalPlayerDice > finalHouseDice) won = true;
+        else if (selectedBet === 'lower' && finalPlayerDice < finalHouseDice) won = true;
+        else if (selectedBet === 'equal' && finalPlayerDice === finalHouseDice) won = true;
+        const multiplier = selectedBet === 'equal' ? 5.5 : 2.3;
+        winAmount = won ? Math.floor(betAmount * multiplier) : 0;
+      }
+
+      // Wait for animation to catch up
+      await new Promise(r => setTimeout(r, 2500));
+      clearInterval(rollInterval);
+
       setPlayerDice(finalPlayerDice);
       setHouseDice(finalHouseDice);
-
-      // Determine winner
-      let won = false;
-      if (selectedBet === 'higher' && finalPlayerDice > finalHouseDice) {
-        won = true;
-      } else if (selectedBet === 'lower' && finalPlayerDice < finalHouseDice) {
-        won = true;
-      } else if (selectedBet === 'equal' && finalPlayerDice === finalHouseDice) {
-        won = true;
-      }
 
       if (won) {
         setStatus('success');
         onWin(walletAddress ?? '');
         playWinSound();
-        const winAmount = betAmount * 2; // Double the bet for winning
 
         try {
-          const API_BASE = import.meta.env.VITE_API_BASE || '';
           const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
 
           if (!API_BASE) {
             console.log('No API base URL set, skipping payout');
             setPayoutAmountCkb(winAmount);
             setPayoutTxHash('demo-mode');
-            // Don't return here - continue to show success modal
           } else {
             const resp = await fetch(`${API_BASE}/api/payout`, {
               method: 'POST',
@@ -208,10 +233,10 @@ export function DiceRoll({
             });
 
             if (!resp.ok) {
-              let errorData;
+              let errorData: Record<string, unknown>;
               try {
                 errorData = await resp.json();
-              } catch (e) {
+              } catch (_e) {
                 throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
               }
 
@@ -231,7 +256,7 @@ export function DiceRoll({
                 throw new Error(parts.join(' '));
               }
 
-              throw new Error(errorData.message || errorData.error || `Payout failed with status ${resp.status}`);
+              throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
             }
 
             const json = await resp.json();
@@ -320,7 +345,7 @@ export function DiceRoll({
         <div>
           <label className="text-sm text-gray-400 mb-2 block">Bet Amount (CKB)</label>
           <div className="grid grid-cols-3 gap-2">
-            {[50, 100, 200].map((amount) => (
+            {[100, 200, 500].map((amount) => (
               <button
                 key={amount}
                 onClick={() => setBetAmount(amount)}
@@ -430,6 +455,7 @@ export function DiceRoll({
                       <div className="mt-2 text-xs text-gray-500">No payout was sent for this outcome.</div>
                     )}
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-[#39ff14] text-black font-bold uppercase tracking-wider rounded-xl hover:bg-[#32e010] transition-colors"
@@ -448,6 +474,7 @@ export function DiceRoll({
                     <h2 className="text-3xl font-black text-white italic uppercase mb-2">You Lost</h2>
                     <p className="text-gray-400 text-sm">Better luck next time!</p>
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-white/10 text-white font-bold uppercase tracking-wider rounded-xl hover:bg-white/20 transition-colors"

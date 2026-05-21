@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Zap, PartyPopper, Frown, Trophy } from 'lucide-react';
+import { getAudioContext } from '../../utils/audio';
+import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Spinning sound effect
 const playSpinSound = () => {
     try {
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioContext = getAudioContext();
+        if (!audioContext) return;
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
 
@@ -25,7 +29,7 @@ const playSpinSound = () => {
 
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 4);
-    } catch (e) {
+    } catch (_e) {
         console.log('Audio not supported');
     }
 };
@@ -33,7 +37,8 @@ const playSpinSound = () => {
 // Win sound effect
 const playWinSound = () => {
     try {
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioContext = getAudioContext();
+        if (!audioContext) return;
         const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
         notes.forEach((freq, i) => {
             const oscillator = audioContext.createOscillator();
@@ -46,7 +51,7 @@ const playWinSound = () => {
             oscillator.start(audioContext.currentTime + i * 0.1);
             oscillator.stop(audioContext.currentTime + i * 0.1 + 0.3);
         });
-    } catch (e) {
+    } catch (_e) {
         console.log('Audio not supported');
     }
 };
@@ -61,14 +66,14 @@ interface SpinWheelProps {
     onWin: (winner: string) => void;
 }
 
-// Wheel Configuration
+// Multiplier-based wheel segments — payout = betAmount × multiplier
 const SEGMENTS = [
-    { label: '100 CKB', value: 100, color: '#facc15', textColor: '#000', probability: 0.25 },
-    { label: 'EMPTY', value: 0, color: '#ef4444', textColor: '#fff', probability: 0.299 },
-    { label: '200 CKB', value: 200, color: '#3b82f6', textColor: '#fff', probability: 0.12 },
-    { label: 'EMPTY', value: 0, color: '#22c55e', textColor: '#000', probability: 0.299 },
-    { label: 'JACKPOT', value: 10000, color: '#a855f7', textColor: '#fff', probability: 0.002 },
-    { label: '500 CKB', value: 500, color: '#f97316', textColor: '#fff', probability: 0.03 },
+    { label: '1.5x', multiplier: 1.5, color: '#facc15', textColor: '#000', probability: 0.28 },
+    { label: 'MISS', multiplier: 0, color: '#ef4444', textColor: '#fff', probability: 0.28 },
+    { label: '2x', multiplier: 2, color: '#3b82f6', textColor: '#fff', probability: 0.14 },
+    { label: 'MISS', multiplier: 0, color: '#22c55e', textColor: '#000', probability: 0.26 },
+    { label: 'JACKPOT 50x', multiplier: 50, color: '#a855f7', textColor: '#fff', probability: 0.005 },
+    { label: '3x', multiplier: 3, color: '#f97316', textColor: '#fff', probability: 0.035 },
 ];
 
 function hexByteLength(hex: string): number {
@@ -101,11 +106,13 @@ export function SpinWheel({
     const [errorText, setErrorText] = useState<string>('');
     const [payoutTxHash, setPayoutTxHash] = useState<string>('');
     const [payoutAmountCkb, setPayoutAmountCkb] = useState<number | null>(null);
+    const [fairnessProof, setFairnessProof] = useState<FairnessProof | null>(null);
 
     const [isSpinning, setIsSpinning] = useState(false);
     const [rotation, setRotation] = useState(0);
     const [status, setStatus] = useState<'idle' | 'spinning' | 'success' | 'lost' | 'error'>('idle');
     const [showModal, setShowModal] = useState(false);
+    const [betAmount, setBetAmount] = useState<number>(100);
 
     useEffect(() => {
         console.log("Spin Wheel game initialized at:", gameAddress);
@@ -129,8 +136,9 @@ export function SpinWheel({
             setErrorText('');
             setPayoutTxHash('');
             setPayoutAmountCkb(null);
+            setFairnessProof(null);
 
-            const requestedBetCkb = 100;
+            const requestedBetCkb = betAmount;
             let toLock: ccc.Script;
             try {
                 ({ script: toLock } = await ccc.Address.fromString(gameAddress, signer.client));
@@ -154,21 +162,44 @@ export function SpinWheel({
                 output.capacity = ccc.fixedPointFrom(betAmountCkb);
             });
             await tx.completeInputsByCapacity(signer);
-            await tx.completeFeeBy(signer, 2000); // Increased fee rate to avoid RBF issues
+            await tx.completeFeeBy(signer, 2000);
             const txHash = await signer.sendTransaction(tx);
             onTx?.(txHash);
 
-            // Determine result based on probabilities (Simulation)
-            const random = Math.random();
-            let accumulatedProbability = 0;
-            let selectedSegmentIndex = 0;
+            // Determine result — provably fair or demo mode
+            const API_BASE = import.meta.env.VITE_API_BASE || '';
+            let selectedSegmentIndex: number;
+            let resultValue: number;
+            let resultLabel: string;
 
-            for (let i = 0; i < SEGMENTS.length; i++) {
-                accumulatedProbability += SEGMENTS[i].probability;
-                if (random <= accumulatedProbability) {
-                    selectedSegmentIndex = i;
-                    break;
+            if (API_BASE) {
+                // Provably fair mode
+                const crResult = await playCommitReveal({
+                    gameType: 'spin-wheel',
+                    betAmount: requestedBetCkb,
+                    betTxHash: txHash,
+                });
+
+                const details = crResult.outcome.details as { segmentIndex: number; label: string };
+                selectedSegmentIndex = details.segmentIndex;
+                resultValue = crResult.outcome.winAmount;
+                resultLabel = details.label;
+                setFairnessProof(crResult.proof);
+            } else {
+                // Demo mode
+                const random = Math.random();
+                let accumulatedProbability = 0;
+                selectedSegmentIndex = 0;
+
+                for (let i = 0; i < SEGMENTS.length; i++) {
+                    accumulatedProbability += SEGMENTS[i].probability;
+                    if (random <= accumulatedProbability) {
+                        selectedSegmentIndex = i;
+                        break;
+                    }
                 }
+                resultValue = SEGMENTS[selectedSegmentIndex].multiplier * betAmount;
+                resultLabel = SEGMENTS[selectedSegmentIndex].label;
             }
 
             // Calculate Rotation
@@ -194,22 +225,19 @@ export function SpinWheel({
             // Wait for animation
             await new Promise(r => setTimeout(r, 4500));
 
-            const result = SEGMENTS[selectedSegmentIndex];
+            onOutcome?.({ label: resultLabel, value: resultValue, txHash });
 
-            onOutcome?.({ label: result.label, value: result.value, txHash });
-
-            if (result.value > 0) {
+            if (resultValue > 0) {
                 setStatus('success');
                 onWin(walletAddress ?? '');
                 playWinSound();
 
                 try {
-                    const API_BASE = import.meta.env.VITE_API_BASE || '';
                     const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
 
                     if (!API_BASE) {
                         console.log('No API base URL set, skipping payout');
-                        setPayoutAmountCkb(result.value);
+                        setPayoutAmountCkb(resultValue);
                         setPayoutTxHash('demo-mode');
                     } else {
                         const resp = await fetch(`${API_BASE}/api/payout`, {
@@ -220,16 +248,16 @@ export function SpinWheel({
                             },
                             body: JSON.stringify({
                                 toAddress: walletAddress,
-                                amountCkb: result.value,
+                                amountCkb: resultValue,
                                 betTxHash: txHash,
                             }),
                         });
 
                         if (!resp.ok) {
-                            let errorData;
+                            let errorData: Record<string, unknown>;
                             try {
                                 errorData = await resp.json();
-                            } catch (e) {
+                            } catch (_e) {
                                 throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
                             }
 
@@ -249,7 +277,7 @@ export function SpinWheel({
                                 throw new Error(parts.join(' '));
                             }
 
-                            throw new Error(errorData.message || errorData.error || `Payout failed with status ${resp.status}`);
+                            throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
                         }
 
                         const json = await resp.json();
@@ -343,7 +371,7 @@ export function SpinWheel({
                                         >
                                             {segment.label}
                                         </span>
-                                        {segment.value > 0 && (
+                                        {segment.multiplier > 0 && (
                                             <Trophy className="w-4 h-4 mx-auto mt-2 opacity-80" style={{ color: segment.textColor }} />
                                         )}
                                     </div>
@@ -401,7 +429,7 @@ export function SpinWheel({
                                     <span className="flex items-center gap-2">
                                         SPIN <Zap className="w-5 h-5 fill-current" />
                                     </span>
-                                    <span className="mt-1 text-[11px] font-mono font-bold text-black/70">(100 CKB)</span>
+                                    <span className="mt-1 text-[11px] font-mono font-bold text-black/70">({betAmount} CKB)</span>
                                 </span>
                             ) : (
                                 <span className="flex items-center gap-2">
@@ -415,6 +443,27 @@ export function SpinWheel({
                         <div className="absolute inset-0 -translate-x-full group-hover:animate-[shimmer_1s_infinite] bg-gradient-to-r from-transparent via-white/30 to-transparent skew-x-12" />
                     )}
                 </button>
+            </div>
+
+            {/* Bet Selection */}
+            <div className="w-full max-w-md">
+                <label className="text-sm text-gray-400 mb-2 block text-center">Bet Amount (CKB)</label>
+                <div className="grid grid-cols-4 gap-2">
+                    {[100, 200, 500, 1000].map((amount) => (
+                        <button
+                            key={amount}
+                            onClick={() => setBetAmount(amount)}
+                            disabled={isSpinning}
+                            className={`px-3 py-2 rounded-xl font-bold text-sm transition-all ${
+                                betAmount === amount
+                                    ? 'bg-primary text-black'
+                                    : 'bg-white/5 text-gray-300 hover:bg-white/10 border border-white/10'
+                            } ${isSpinning ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                            {amount}
+                        </button>
+                    ))}
+                </div>
             </div>
 
             {/* RESULT MODAL */}
@@ -476,6 +525,7 @@ export function SpinWheel({
                                         )}
                                     </div>
 
+                                    <ProvablyFairBadge proof={fairnessProof} />
                                     <button
                                         onClick={() => setShowModal(false)}
                                         className="w-full py-4 bg-[#39ff14] text-black font-bold uppercase tracking-wider rounded-xl hover:bg-[#32e010] transition-colors"
@@ -494,6 +544,7 @@ export function SpinWheel({
                                         <h2 className="text-3xl font-black text-white italic uppercase mb-2">No Luck</h2>
                                         <p className="text-gray-400 text-sm">Better luck next time.</p>
                                     </div>
+                                    <ProvablyFairBadge proof={fairnessProof} />
                                     <button
                                         onClick={() => setShowModal(false)}
                                         className="w-full py-4 bg-white/10 text-white font-bold uppercase tracking-wider rounded-xl hover:bg-white/20 transition-colors"

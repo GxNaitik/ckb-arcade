@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Trophy, Frown, Zap } from 'lucide-react';
+import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 interface NumberGuessProps {
   gameAddress: string;
@@ -40,11 +42,12 @@ export function NumberGuess({
   const [errorText, setErrorText] = useState<string>('');
   const [payoutTxHash, setPayoutTxHash] = useState<string>('');
   const [payoutAmountCkb, setPayoutAmountCkb] = useState<number | null>(null);
+  const [fairnessProof, setFairnessProof] = useState<FairnessProof | null>(null);
 
   const [isGuessing, setIsGuessing] = useState(false);
   const [selectedNumber, setSelectedNumber] = useState<number>(5);
   const [targetNumber, setTargetNumber] = useState<number | null>(null);
-  const [betAmount, setBetAmount] = useState<number>(75);
+  const [betAmount, setBetAmount] = useState<number>(100);
   const [status, setStatus] = useState<'idle' | 'guessing' | 'success' | 'lost' | 'error'>('idle');
   const [showModal, setShowModal] = useState(false);
   const [attempts, setAttempts] = useState<number[]>([]);
@@ -71,6 +74,7 @@ export function NumberGuess({
       setErrorText('');
       setPayoutTxHash('');
       setPayoutAmountCkb(null);
+      setFairnessProof(null);
       setTargetNumber(null);
       setAttempts([]);
 
@@ -97,12 +101,37 @@ export function NumberGuess({
         output.capacity = ccc.fixedPointFrom(finalBetAmount);
       });
       await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, 2000); // Increased fee rate to avoid RBF issues
+      await tx.completeFeeBy(signer, 2000);
       const txHash = await signer.sendTransaction(tx);
       onTx?.(txHash);
 
-      // Generate random target number
-      const target = Math.floor(Math.random() * 10) + 1;
+      // Run commit-reveal to get provably fair outcome
+      const API_BASE = import.meta.env.VITE_API_BASE || '';
+      let target: number;
+      let won: boolean;
+      let winAmount: number;
+
+      if (API_BASE) {
+        // Provably fair mode
+        const crResult = await playCommitReveal({
+          gameType: 'number-guess',
+          betAmount,
+          betTxHash: txHash,
+          playerChoice: selectedNumber,
+        });
+
+        const details = crResult.outcome.details as { target: number };
+        target = details.target;
+        won = crResult.outcome.won;
+        winAmount = crResult.outcome.winAmount;
+        setFairnessProof(crResult.proof);
+      } else {
+        // Demo mode
+        target = Math.floor(Math.random() * 10) + 1;
+        won = selectedNumber === target;
+        winAmount = won ? betAmount * 10 : 0;
+      }
+
       setTargetNumber(target);
 
       // Animate guessing process
@@ -111,23 +140,17 @@ export function NumberGuess({
         setAttempts(prev => [...prev, Math.floor(Math.random() * 10) + 1]);
       }
 
-      // Determine winner
-      const won = selectedNumber === target;
-
       if (won) {
         setStatus('success');
         onWin(walletAddress ?? '');
-        const winAmount = betAmount * 10; // 10x the bet for correct guess
 
         try {
-          const API_BASE = import.meta.env.VITE_API_BASE || '';
           const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
 
           if (!API_BASE) {
             console.log('No API base URL set, skipping payout');
             setPayoutAmountCkb(winAmount);
             setPayoutTxHash('demo-mode');
-            // Don't return here - continue to show success modal
           } else {
             const resp = await fetch(`${API_BASE}/api/payout`, {
               method: 'POST',
@@ -143,10 +166,10 @@ export function NumberGuess({
             });
 
             if (!resp.ok) {
-              let errorData;
+              let errorData: Record<string, unknown>;
               try {
                 errorData = await resp.json();
-              } catch (e) {
+              } catch (_e) {
                 throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
               }
 
@@ -166,7 +189,7 @@ export function NumberGuess({
                 throw new Error(parts.join(' '));
               }
 
-              throw new Error(errorData.message || errorData.error || `Payout failed with status ${resp.status}`);
+              throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
             }
 
             const json = await resp.json();
@@ -275,7 +298,7 @@ export function NumberGuess({
         <div>
           <label className="text-sm text-gray-400 mb-2 block">Bet Amount (CKB)</label>
           <div className="grid grid-cols-4 gap-2">
-            {[50, 75, 100, 200].map((amount) => (
+            {[100, 200, 500, 750].map((amount) => (
               <button
                 key={amount}
                 onClick={() => setBetAmount(amount)}
@@ -386,6 +409,7 @@ export function NumberGuess({
                       <div className="mt-2 text-xs text-gray-500">No payout was sent for this outcome.</div>
                     )}
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-[#39ff14] text-black font-bold uppercase tracking-wider rounded-xl hover:bg-[#32e010] transition-colors"
@@ -404,6 +428,7 @@ export function NumberGuess({
                     <h2 className="text-3xl font-black text-white italic uppercase mb-2">Not Quite!</h2>
                     <p className="text-gray-400 text-sm">You guessed {selectedNumber} but the target was {targetNumber}!</p>
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-white/10 text-white font-bold uppercase tracking-wider rounded-xl hover:bg-white/20 transition-colors"

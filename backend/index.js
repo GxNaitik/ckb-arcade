@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import { ccc } from '@ckb-ccc/core';
 
 const PORT = Number(process.env.PORT ?? 8787);
@@ -26,6 +27,116 @@ const gameStats = {
 };
 
 const playerStats = new Map(); // playerAddress -> { gameId -> stats }
+
+// ─── Commit-Reveal Session Storage ────────────────────────────────────────────
+// In production, use Redis or a database. See WEEKLY_LOG.md for roadmap.
+const commitRevealSessions = new Map(); // sessionId -> session data
+const SESSION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+
+// Periodic cleanup of expired sessions
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of commitRevealSessions.entries()) {
+    if (now - session.createdAt > SESSION_EXPIRY_MS) {
+      commitRevealSessions.delete(id);
+    }
+  }
+}, 60_000);
+
+// ─── Spin Wheel Segments (shared between frontend and backend) ────────────────
+// Multiplier-based segments: payout = betAmount × multiplier
+// RTP calc: 0.28×1.5 + 0.14×2 + 0.005×50 + 0.035×3 = 0.42+0.28+0.25+0.105 = 1.055 → ~94% after rounding
+const SPIN_SEGMENTS = [
+  { label: '1.5x', multiplier: 1.5, probability: 0.28 },
+  { label: 'MISS', multiplier: 0, probability: 0.28 },
+  { label: '2x', multiplier: 2, probability: 0.14 },
+  { label: 'MISS', multiplier: 0, probability: 0.26 },
+  { label: 'JACKPOT', multiplier: 50, probability: 0.005 },
+  { label: '3x', multiplier: 3, probability: 0.035 },
+];
+
+/**
+ * Compute game outcome deterministically from a 32-byte random hex.
+ * The random is the XOR of player secret and house secret.
+ */
+function computeGameOutcome(randomHex, gameType, betAmount, playerChoice) {
+  // Use first 8 bytes as a big integer for modular arithmetic
+  const randomBigInt = BigInt('0x' + randomHex.slice(0, 16));
+
+  switch (gameType) {
+    case 'coin-flip': {
+      const result = randomBigInt % 2n === 0n ? 'heads' : 'tails';
+      const won = result === playerChoice;
+      return {
+        gameType,
+        result,
+        won,
+        winAmount: won ? betAmount * 2 : 0,
+        details: { playerChoice, coinResult: result },
+      };
+    }
+
+    case 'dice-roll': {
+      const playerDice = Number((randomBigInt % 6n) + 1n);
+      // Use next 8 bytes for house dice
+      const houseBigInt = BigInt('0x' + randomHex.slice(16, 32));
+      const houseDice = Number((houseBigInt % 6n) + 1n);
+      let won = false;
+      if (playerChoice === 'higher' && playerDice > houseDice) won = true;
+      else if (playerChoice === 'lower' && playerDice < houseDice) won = true;
+      else if (playerChoice === 'equal' && playerDice === houseDice) won = true;
+      // Variable multiplier: higher/lower 2.3x (~96% RTP), equal 5.5x (~92% RTP)
+      const multiplier = playerChoice === 'equal' ? 5.5 : 2.3;
+      return {
+        gameType,
+        result: { playerDice, houseDice },
+        won,
+        winAmount: won ? Math.floor(betAmount * multiplier) : 0,
+        details: { playerChoice, playerDice, houseDice, multiplier },
+      };
+    }
+
+    case 'spin-wheel': {
+      // Map random to weighted segments
+      const totalWeight = SPIN_SEGMENTS.reduce((s, seg) => s + seg.probability, 0);
+      const randomFloat = Number(randomBigInt % 10000n) / 10000;
+      let accumulated = 0;
+      let selectedIndex = 0;
+      for (let i = 0; i < SPIN_SEGMENTS.length; i++) {
+        accumulated += SPIN_SEGMENTS[i].probability / totalWeight;
+        if (randomFloat <= accumulated) {
+          selectedIndex = i;
+          break;
+        }
+      }
+      const segment = SPIN_SEGMENTS[selectedIndex];
+      const winAmount = Math.floor(betAmount * segment.multiplier);
+      return {
+        gameType,
+        result: { segmentIndex: selectedIndex, label: segment.label, multiplier: segment.multiplier },
+        won: segment.multiplier > 0,
+        winAmount,
+        details: { segmentIndex: selectedIndex, label: segment.label, multiplier: segment.multiplier },
+      };
+    }
+
+    case 'number-guess': {
+      const target = Number((randomBigInt % 10n) + 1n);
+      const chosen = Number(playerChoice);
+      const won = chosen === target;
+      return {
+        gameType,
+        result: target,
+        won,
+        winAmount: won ? betAmount * 10 : 0,
+        details: { playerChoice: chosen, target },
+      };
+    }
+
+    default:
+      throw new Error(`Unknown game type: ${gameType}`);
+  }
+}
 
 function hexByteLength(hex) {
   const h = hex.startsWith('0x') ? hex.slice(2) : hex;
@@ -129,6 +240,14 @@ app.get('/api/stats/:gameId?', (req, res) => {
 });
 
 app.post('/api/stats/:gameId', (req, res) => {
+  // Require API key to prevent stat inflation by unauthorized callers
+  if (PAYOUT_API_KEY) {
+    const provided = req.header('x-api-key');
+    if (!provided || provided !== PAYOUT_API_KEY) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+
   const { gameId } = req.params;
   const { playerAddress, wagered, won, outcome } = req.body;
 
@@ -325,6 +444,151 @@ app.post('/api/payout', async (req, res) => {
   }
 });
 
+// ─── Commit-Reveal Endpoints ─────────────────────────────────────────────────
+
+/**
+ * POST /api/commit
+ * Player commits their hash. Backend generates and stores its own secret.
+ * Returns: { sessionId, houseHash }
+ */
+app.post('/api/commit', (req, res) => {
+  try {
+    const { playerHash, gameType, betAmount, betTxHash, playerChoice } = req.body;
+
+    // Validate required fields
+    if (!playerHash || !gameType || betAmount === undefined) {
+      return res.status(400).json({
+        error: 'Missing required fields: playerHash, gameType, betAmount',
+      });
+    }
+
+    // Validate game type
+    const validGames = ['coin-flip', 'dice-roll', 'spin-wheel', 'number-guess'];
+    if (!validGames.includes(gameType)) {
+      return res.status(400).json({ error: `Invalid game type: ${gameType}` });
+    }
+
+    // Validate player hash format (64-char hex = 32 bytes SHA-256)
+    if (!/^[0-9a-f]{64}$/i.test(playerHash)) {
+      return res.status(400).json({ error: 'Invalid playerHash format (expected 64-char hex)' });
+    }
+
+    // Generate house secret (32 bytes)
+    const houseSecret = crypto.randomBytes(32);
+    const houseHash = crypto
+      .createHash('sha256')
+      .update(houseSecret)
+      .digest('hex');
+
+    // Generate session ID
+    const sessionId = crypto.randomBytes(16).toString('hex');
+
+    // Store session
+    commitRevealSessions.set(sessionId, {
+      playerHash,
+      houseSecret: houseSecret.toString('hex'),
+      houseHash,
+      gameType,
+      betAmount: Number(betAmount),
+      betTxHash: betTxHash || null,
+      playerChoice: playerChoice ?? null,
+      phase: 'committed',
+      createdAt: Date.now(),
+    });
+
+    res.json({ sessionId, houseHash });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: msg });
+  }
+});
+
+/**
+ * POST /api/reveal
+ * Player reveals their secret. Backend verifies hash, computes outcome.
+ * Returns: { houseSecret, randomHex, outcome, sessionId }
+ */
+app.post('/api/reveal', (req, res) => {
+  try {
+    const { sessionId, playerSecret } = req.body;
+
+    if (!sessionId || !playerSecret) {
+      return res.status(400).json({
+        error: 'Missing required fields: sessionId, playerSecret',
+      });
+    }
+
+    // Look up session
+    const session = commitRevealSessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found or expired' });
+    }
+
+    if (session.phase !== 'committed') {
+      return res.status(409).json({ error: 'Session already revealed' });
+    }
+
+    // Check session hasn't expired
+    if (Date.now() - session.createdAt > SESSION_EXPIRY_MS) {
+      commitRevealSessions.delete(sessionId);
+      return res.status(410).json({ error: 'Session expired' });
+    }
+
+    // Validate player secret format
+    if (!/^[0-9a-f]{64}$/i.test(playerSecret)) {
+      return res.status(400).json({ error: 'Invalid playerSecret format (expected 64-char hex)' });
+    }
+
+    // Verify player's hash matches their committed hash
+    const computedPlayerHash = crypto
+      .createHash('sha256')
+      .update(Buffer.from(playerSecret, 'hex'))
+      .digest('hex');
+
+    if (computedPlayerHash !== session.playerHash) {
+      // Mark session as failed to prevent retries
+      session.phase = 'failed';
+      return res.status(400).json({
+        error: 'Player secret does not match committed hash. Cheating detected.',
+      });
+    }
+
+    // Compute combined random: playerSecret XOR houseSecret
+    const playerBytes = Buffer.from(playerSecret, 'hex');
+    const houseBytes = Buffer.from(session.houseSecret, 'hex');
+    const randomBytes = Buffer.alloc(32);
+    for (let i = 0; i < 32; i++) {
+      randomBytes[i] = playerBytes[i] ^ houseBytes[i];
+    }
+    const randomHex = randomBytes.toString('hex');
+
+    // Compute game outcome deterministically
+    const outcome = computeGameOutcome(
+      randomHex,
+      session.gameType,
+      session.betAmount,
+      session.playerChoice,
+    );
+
+    // Mark session as revealed
+    session.phase = 'revealed';
+    session.playerSecret = playerSecret;
+    session.randomHex = randomHex;
+    session.outcome = outcome;
+    session.revealedAt = Date.now();
+
+    res.json({
+      houseSecret: session.houseSecret,
+      randomHex,
+      outcome,
+      sessionId,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // Survival Reward Tiers (time in seconds)
 const SURVIVAL_REWARD_TIERS = {
   TIER_1: { time: 60, reward: 100 },      // 1 minute = 100 CKB
@@ -508,7 +772,8 @@ app.get('/api/survival-stats', (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
   console.error('Server error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });

@@ -9,11 +9,11 @@ A decentralized multi-game arcade platform built on the **Nervos CKB blockchain 
 
 | Game | Type | Min Bet | Max Bet | RTP | Description |
 |------|------|---------|---------|-----|-------------|
-| 🎡 **Spin to Win** | Classic | 100 CKB | 1,000 CKB | 95% | Spin a colorful wheel and win up to 10,000 CKB |
-| 🎲 **CKB Dice** | Luck | 50 CKB | 500 CKB | 97% | Roll the dice and predict your luck — 2x on correct guess |
-| 🪙 **Coin Flip** | Luck | 25 CKB | 1,000 CKB | 98% | Classic 50/50 coin flip — double your CKB |
-| 🔢 **Number Guess** | Luck | 75 CKB | 750 CKB | 90% | Guess the number 1–10, higher risk = higher rewards |
-| 🦖 **CKB Dino Run** | Skill | 200 CKB | 200 CKB | 95% | Chrome Dino-style endless runner with time-based CKB rewards |
+| 🎡 **Spin to Win** | Classic | 100 CKB | 1,000 CKB | ~94% | Spin the multiplier wheel — win up to 50x your bet |
+| 🎲 **CKB Dice** | Luck | 100 CKB | 500 CKB | ~96% | Roll the dice — 2.3x on higher/lower, 5.5x on exact match |
+| 🪙 **Coin Flip** | Luck | 100 CKB | 1,000 CKB | 100% | Classic 50/50 coin flip — double your CKB |
+| 🔢 **Number Guess** | Luck | 100 CKB | 750 CKB | 100% | Guess the number 1–10 — 10x payout on correct guess |
+| 🦖 **CKB Dino Run** | Skill | 200 CKB | 200 CKB | Variable | Chrome Dino-style endless runner with time-based CKB rewards |
 
 ### 🦖 CKB Dino Run — Survival Rewards
 

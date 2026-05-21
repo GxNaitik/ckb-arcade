@@ -152,6 +152,16 @@ function App({
               </div>
             </div>
           )}
+          {!import.meta.env.VITE_API_BASE && (
+            <div className="w-full max-w-4xl mb-6">
+              <div className="glass-panel p-4 rounded-2xl border border-yellow-500/20 bg-yellow-500/5 text-sm text-yellow-200 flex items-center gap-3">
+                <span className="text-lg">⚠️</span>
+                <div>
+                  <span className="font-bold">Demo Mode</span> — Running without a backend. Game outcomes use insecure local randomness. Connect to the backend for provably fair gameplay.
+                </div>
+              </div>
+            </div>
+          )}
 
           {renderGame()}
 
@@ -179,7 +189,7 @@ function App({
               >
                 {gameAddress}
               </a>
-              <div>&copy; 2024 CKB Arcade. Deployed on Nervos Testnet.</div>
+              <div>&copy; 2025 CKB Arcade. Deployed on Nervos Testnet.</div>
             </div>
           )}
         </footer>

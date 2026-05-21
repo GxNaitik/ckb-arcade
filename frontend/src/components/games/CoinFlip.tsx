@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
-import { Loader2, Trophy, Frown, Zap } from 'lucide-react';
+import { Loader2, Zap, Trophy, Frown } from 'lucide-react';
+import { getAudioContext } from '../../utils/audio';
+import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
+import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Coin flip sound effect
 const playCoinFlipSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
 
@@ -24,7 +28,7 @@ const playCoinFlipSound = () => {
 
     oscillator.start(audioContext.currentTime);
     oscillator.stop(audioContext.currentTime + 0.5);
-  } catch (e) {
+  } catch (_e) {
     console.log('Audio not supported');
   }
 };
@@ -32,7 +36,8 @@ const playCoinFlipSound = () => {
 // Win sound effect
 const playWinSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
     notes.forEach((freq, i) => {
       const oscillator = audioContext.createOscillator();
@@ -45,7 +50,7 @@ const playWinSound = () => {
       oscillator.start(audioContext.currentTime + i * 0.1);
       oscillator.stop(audioContext.currentTime + i * 0.1 + 0.3);
     });
-  } catch (e) {
+  } catch (_e) {
     console.log('Audio not supported');
   }
 };
@@ -88,11 +93,12 @@ export function CoinFlip({
   const [errorText, setErrorText] = useState<string>('');
   const [payoutTxHash, setPayoutTxHash] = useState<string>('');
   const [payoutAmountCkb, setPayoutAmountCkb] = useState<number | null>(null);
+  const [fairnessProof, setFairnessProof] = useState<FairnessProof | null>(null);
 
   const [isFlipping, setIsFlipping] = useState(false);
   const [selectedSide, setSelectedSide] = useState<'heads' | 'tails'>('heads');
   const [result, setResult] = useState<'heads' | 'tails' | null>(null);
-  const [betAmount, setBetAmount] = useState<number>(25);
+  const [betAmount, setBetAmount] = useState<number>(100);
   const [status, setStatus] = useState<'idle' | 'flipping' | 'success' | 'lost' | 'error'>('idle');
   const [showModal, setShowModal] = useState(false);
   const [coinRotation, setCoinRotation] = useState(0);
@@ -119,6 +125,7 @@ export function CoinFlip({
       setErrorText('');
       setPayoutTxHash('');
       setPayoutAmountCkb(null);
+      setFairnessProof(null);
       setResult(null);
       // Reset rotation to 0 so each flip starts fresh (prevents parity drift)
       setCoinRotation(0);
@@ -146,21 +153,41 @@ export function CoinFlip({
         output.capacity = ccc.fixedPointFrom(finalBetAmount);
       });
       await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, 2000); // Increased fee rate to avoid RBF issues
+      await tx.completeFeeBy(signer, 2000);
       const txHash = await signer.sendTransaction(tx);
       onTx?.(txHash);
 
-      // Animate coin flip
+      // Start coin flip animation
       playCoinFlipSound();
-      const finalResult = Math.random() < 0.5 ? 'heads' : 'tails';
 
-      // The coin's front face (0° / rotateY(0)) shows HEADS.
-      // The back face (rotateY(180°)) shows TAILS.
-      // We need the final rotation to land on:
-      //   - Heads: total rotation is a multiple of 360° (front face visible)
-      //   - Tails: total rotation is 180° + a multiple of 360° (back face visible)
-      // Use enough full spins for a dramatic animation, then add the correct offset.
-      const fullSpins = 10 + Math.floor(Math.random() * 5); // 10-14 full spins
+      // Run commit-reveal to get provably fair outcome
+      const API_BASE = import.meta.env.VITE_API_BASE || '';
+      let finalResult: 'heads' | 'tails';
+      let won: boolean;
+      let winAmount = 0;
+
+      if (API_BASE) {
+        // Provably fair mode — use commit-reveal
+        const crResult = await playCommitReveal({
+          gameType: 'coin-flip',
+          betAmount,
+          betTxHash: txHash,
+          playerChoice: selectedSide,
+        });
+
+        finalResult = crResult.outcome.details.coinResult as 'heads' | 'tails';
+        won = crResult.outcome.won;
+        winAmount = crResult.outcome.winAmount;
+        setFairnessProof(crResult.proof);
+      } else {
+        // Demo mode — fallback to Math.random
+        finalResult = Math.random() < 0.5 ? 'heads' : 'tails';
+        won = selectedSide === finalResult;
+        winAmount = won ? betAmount * 2 : 0;
+      }
+
+      // Animate the coin to match the result
+      const fullSpins = 10 + Math.floor(Math.random() * 5);
       const baseRotation = fullSpins * 360;
       const totalRotation = baseRotation + (finalResult === 'tails' ? 180 : 0);
 
@@ -173,24 +200,18 @@ export function CoinFlip({
 
       setResult(finalResult);
 
-      // Determine winner
-      const won = selectedSide === finalResult;
-
       if (won) {
         setStatus('success');
         onWin(walletAddress ?? '');
         playWinSound();
-        const winAmount = betAmount * 2; // Double the bet for winning
 
         try {
-          const API_BASE = import.meta.env.VITE_API_BASE || '';
           const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
 
           if (!API_BASE) {
             console.log('No API base URL set, skipping payout');
             setPayoutAmountCkb(winAmount);
             setPayoutTxHash('demo-mode');
-            // Don't return here - continue to show success modal
           } else {
             const resp = await fetch(`${API_BASE}/api/payout`, {
               method: 'POST',
@@ -206,10 +227,10 @@ export function CoinFlip({
             });
 
             if (!resp.ok) {
-              let errorData;
+              let errorData: Record<string, unknown>;
               try {
                 errorData = await resp.json();
-              } catch (e) {
+              } catch (_e) {
                 throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
               }
 
@@ -229,7 +250,7 @@ export function CoinFlip({
                 throw new Error(parts.join(' '));
               }
 
-              throw new Error(errorData.message || errorData.error || `Payout failed with status ${resp.status}`);
+              throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
             }
 
             const json = await resp.json();
@@ -334,7 +355,7 @@ export function CoinFlip({
         <div>
           <label className="text-sm text-gray-400 mb-2 block">Bet Amount (CKB)</label>
           <div className="grid grid-cols-4 gap-2">
-            {[25, 50, 100, 200].map((amount) => (
+            {[100, 200, 500, 1000].map((amount) => (
               <button
                 key={amount}
                 onClick={() => setBetAmount(amount)}
@@ -444,6 +465,7 @@ export function CoinFlip({
                       <div className="mt-2 text-xs text-gray-500">No payout was sent for this outcome.</div>
                     )}
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-[#39ff14] text-black font-bold uppercase tracking-wider rounded-xl hover:bg-[#32e010] transition-colors"
@@ -462,6 +484,7 @@ export function CoinFlip({
                     <h2 className="text-3xl font-black text-white italic uppercase mb-2">You Lost</h2>
                     <p className="text-gray-400 text-sm">The coin landed on {result}!</p>
                   </div>
+                  <ProvablyFairBadge proof={fairnessProof} />
                   <button
                     onClick={() => setShowModal(false)}
                     className="w-full py-4 bg-white/10 text-white font-bold uppercase tracking-wider rounded-xl hover:bg-white/20 transition-colors"

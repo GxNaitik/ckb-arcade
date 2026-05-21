@@ -1,3 +1,16 @@
 node_modules/
 dist/
 .env
+.env.local
+.env.production
+
+# Build/lint output
+build_output.txt
+lint_*.txt
+
+# Submission media (removed)
+submission-media/
+
+# OS files
+.DS_Store
+Thumbs.db

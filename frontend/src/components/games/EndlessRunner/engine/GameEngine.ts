@@ -43,10 +43,10 @@ interface PerformanceMetrics {
  * - refs allow mutable data without triggering React re-renders
  * - Only UI components should use React state
  */
-export const useGameLoop = ({ 
-  onFrame, 
-  targetFPS = 60, 
-  autoStart = false 
+export const useGameLoop = ({
+  onFrame,
+  targetFPS = 60,
+  autoStart = false
 }: GameLoopConfig) => {
   // Store all game loop state in refs to avoid React re-renders
   const stateRef = useRef<GameLoopState>({
@@ -84,17 +84,17 @@ export const useGameLoop = ({
    */
   const gameLoop = useCallback((currentTime: number) => {
     const state = stateRef.current;
-    
+
     // Skip if game is not running or is paused
     if (!state.isRunning || state.isPaused) {
       return;
     }
 
     // Calculate delta time (time since last frame)
-    const deltaTime = state.lastFrameTime === 0 
+    const deltaTime = state.lastFrameTime === 0
       ? 0 // First frame, no delta time
       : currentTime - state.lastFrameTime;
-    
+
     state.lastFrameTime = currentTime;
 
     // Update total game time
@@ -107,7 +107,7 @@ export const useGameLoop = ({
       state.actualFPS = (state.fpsFrameCount * 1000) / (currentTime - state.fpsUpdateTime);
       state.fpsUpdateTime = currentTime;
       state.fpsFrameCount = 0;
-      
+
       // Update performance metrics
       metricsRef.current.currentFPS = state.actualFPS;
       metricsRef.current.frameTime = deltaTime;
@@ -127,7 +127,7 @@ export const useGameLoop = ({
    */
   const start = useCallback(() => {
     const state = stateRef.current;
-    
+
     if (state.isRunning) {
       return; // Already running
     }
@@ -157,7 +157,7 @@ export const useGameLoop = ({
    */
   const resume = useCallback(() => {
     const state = stateRef.current;
-    
+
     if (!state.isRunning) {
       return; // Can't resume if not running
     }
@@ -168,14 +168,14 @@ export const useGameLoop = ({
 
     // Resume the loop
     animationFrameRef.current = requestAnimationFrame(gameLoop);
-  }, []);
+  }, [gameLoop]);
 
   /**
    * Stop the game loop completely
    */
   const stop = useCallback(() => {
     const state = stateRef.current;
-    
+
     state.isRunning = false;
     state.isPaused = false;
 
@@ -233,14 +233,14 @@ export const useGameLoop = ({
     pause,
     resume,
     stop,
-    
+
     // State getters
     getMetrics,
     getGameState,
-    
+
     // Configuration
     setTargetFPS,
-    
+
     // Read-only state (for UI components)
     isRunning: () => stateRef.current.isRunning,
     isPaused: () => stateRef.current.isPaused,

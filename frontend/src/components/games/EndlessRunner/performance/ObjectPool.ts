@@ -40,7 +40,7 @@ export class ObjectPool<T extends PoolableObject> {
     if (index !== -1) {
       this.active.splice(index, 1);
       obj.reset();
-      
+
       if (this.pool.length < this.maxSize) {
         this.pool.push(obj);
       }
@@ -54,7 +54,7 @@ export class ObjectPool<T extends PoolableObject> {
     while (this.active.length > 0) {
       const obj = this.active.pop()!;
       obj.reset();
-      
+
       if (this.pool.length < this.maxSize) {
         this.pool.push(obj);
       }
@@ -122,11 +122,13 @@ export class PooledCoin implements PoolableObject {
     this.id = '';
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   update(_deltaTime: number): void {
     // Update coin animation or behavior
     // TODO: Implement coin animation logic
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   render(_ctx: CanvasRenderingContext2D): void {
     // Render coin
     // TODO: Implement coin rendering logic
@@ -157,11 +159,13 @@ export class PooledObstacle implements PoolableObject {
     this.color = '#ff4444';
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   update(_deltaTime: number): void {
     // Update obstacle animation or behavior
     // TODO: Implement obstacle animation logic
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   render(_ctx: CanvasRenderingContext2D): void {
     // Render obstacle
     // TODO: Implement obstacle rendering logic
@@ -200,7 +204,7 @@ export class PooledParticle implements PoolableObject {
 
   render(ctx: CanvasRenderingContext2D): void {
     if (this.life <= 0) return;
-    
+
     ctx.save();
     ctx.globalAlpha = this.life;
     ctx.fillStyle = this.color;
@@ -250,7 +254,7 @@ export class ParticleSystem {
     for (let i = this.activeParticles.length - 1; i >= 0; i--) {
       const particle = this.activeParticles[i];
       particle.update(deltaTime);
-      
+
       if (particle.life <= 0) {
         this.particlePool.release(particle);
         this.activeParticles.splice(i, 1);

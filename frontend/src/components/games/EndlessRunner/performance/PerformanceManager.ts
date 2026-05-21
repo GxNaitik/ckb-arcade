@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Performance Manager
  * Coordinates all performance optimizations and monitoring
@@ -20,25 +21,25 @@ export interface PerformanceSettings {
 export class PerformanceManager {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  
+
   // Performance components
   private fpsMonitor!: FPSMonitor;
   private touchOptimizer!: TouchOptimizer;
   private particleSystem!: ParticleSystem;
   private hapticFeedback!: HapticFeedback;
-  
+
   // Object pools
   private coinPool!: ObjectPool<any>;
   private obstaclePool!: ObjectPool<any>;
-  
+
   // Settings
   private settings: PerformanceSettings;
   private currentQuality: 'low' | 'medium' | 'high';
-  
+
   // Adaptive quality
   private qualityCheckInterval: number | null = null;
   private performanceHistory: number[] = [];
-  
+
   // Callbacks
   private onQualityChange?: (quality: string) => void;
   private onPerformanceUpdate?: (metrics: PerformanceMetrics) => void;
@@ -48,7 +49,7 @@ export class PerformanceManager {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Failed to get 2D context');
     this.ctx = ctx;
-    
+
     this.settings = {
       targetFPS: 60,
       enableParticles: true,
@@ -59,9 +60,9 @@ export class PerformanceManager {
       adaptiveQuality: true,
       ...settings,
     };
-    
+
     this.currentQuality = this.settings.quality;
-    
+
     this.initializeComponents();
     this.setupAdaptiveQuality();
   }
@@ -75,23 +76,23 @@ export class PerformanceManager {
       targetFPS: this.settings.targetFPS,
       enableMemoryTracking: true,
     });
-    
+
     // Initialize touch optimizer
     if (this.settings.enableTouchOptimization) {
       this.touchOptimizer = new TouchOptimizer(this.canvas);
     }
-    
+
     // Initialize particle system
     if (this.settings.enableParticles) {
       this.particleSystem = new ParticleSystem(this.settings.particleCount);
     }
-    
+
     // Initialize haptic feedback
     this.hapticFeedback = HapticFeedback.getInstance();
-    
+
     // Initialize object pools
     this.initializeObjectPools();
-    
+
     // Setup callbacks
     this.setupCallbacks();
   }
@@ -110,17 +111,17 @@ export class PerformanceManager {
       }),
       50
     );
-    
+
     // Create obstacle pool
     this.obstaclePool = new ObjectPool(
       () => ({
         x: 0, y: 0, z: 0,
         width: 0, height: 0, depth: 0,
         type: '', color: '#ff4444',
-        reset() { 
-          this.x = this.y = this.z = 0; 
-          this.width = this.height = this.depth = 0; 
-          this.type = ''; this.color = '#ff4444'; 
+        reset() {
+          this.x = this.y = this.z = 0;
+          this.width = this.height = this.depth = 0;
+          this.type = ''; this.color = '#ff4444';
         }
       }),
       30
@@ -136,7 +137,7 @@ export class PerformanceManager {
         this.onPerformanceUpdate?.(metrics);
         this.updatePerformanceHistory(metrics.fps);
       });
-      
+
       this.fpsMonitor.setPerformanceWarningCallback((metrics) => {
         console.warn('Performance warning:', metrics);
         if (this.settings.adaptiveQuality) {
@@ -151,7 +152,7 @@ export class PerformanceManager {
    */
   private setupAdaptiveQuality(): void {
     if (!this.settings.adaptiveQuality) return;
-    
+
     this.qualityCheckInterval = setInterval(() => {
       this.checkPerformance();
     }, 5000) as unknown as number;
@@ -172,10 +173,10 @@ export class PerformanceManager {
    */
   private checkPerformance(): void {
     if (this.performanceHistory.length < 5) return;
-    
+
     const avgFPS = this.performanceHistory.reduce((a, b) => a + b, 0) / this.performanceHistory.length;
     const targetFPS = this.settings.targetFPS;
-    
+
     if (avgFPS < targetFPS * 0.8 && this.currentQuality !== 'low') {
       this.adjustQualityDown();
     } else if (avgFPS > targetFPS * 0.95 && this.currentQuality !== 'high') {
@@ -189,7 +190,7 @@ export class PerformanceManager {
   private adjustQualityDown(): void {
     const qualities: Array<'low' | 'medium' | 'high'> = ['low', 'medium', 'high'];
     const currentIndex = qualities.indexOf(this.currentQuality);
-    
+
     if (currentIndex > 0) {
       this.currentQuality = qualities[currentIndex - 1];
       this.applyQualitySettings(this.currentQuality);
@@ -204,7 +205,7 @@ export class PerformanceManager {
   private adjustQualityUp(): void {
     const qualities: Array<'low' | 'medium' | 'high'> = ['low', 'medium', 'high'];
     const currentIndex = qualities.indexOf(this.currentQuality);
-    
+
     if (currentIndex < qualities.length - 1) {
       this.currentQuality = qualities[currentIndex + 1];
       this.applyQualitySettings(this.currentQuality);
@@ -223,14 +224,14 @@ export class PerformanceManager {
         this.settings.particleCount = 10;
         this.ctx.imageSmoothingEnabled = false;
         break;
-        
+
       case 'medium':
         this.settings.enableParticles = true;
         this.settings.particleCount = 25;
         this.ctx.imageSmoothingEnabled = true;
         this.ctx.imageSmoothingQuality = 'medium';
         break;
-        
+
       case 'high':
         this.settings.enableParticles = true;
         this.settings.particleCount = 50;
@@ -238,7 +239,7 @@ export class PerformanceManager {
         this.ctx.imageSmoothingQuality = 'high';
         break;
     }
-    
+
     // Update particle system
     if (this.particleSystem) {
       this.particleSystem.clear();
@@ -429,14 +430,14 @@ export class PerformanceManager {
    */
   updateSettings(newSettings: Partial<PerformanceSettings>): void {
     this.settings = { ...this.settings, ...newSettings };
-    
+
     if (newSettings.targetFPS) {
       this.fpsMonitor = new FPSMonitor({
         targetFPS: newSettings.targetFPS,
         enableMemoryTracking: true,
       });
     }
-    
+
     if (newSettings.quality) {
       this.setQuality(newSettings.quality);
     }
@@ -473,18 +474,18 @@ export class PerformanceManager {
    */
   destroy(): void {
     this.stop();
-    
+
     if (this.qualityCheckInterval) {
       clearInterval(this.qualityCheckInterval);
       this.qualityCheckInterval = null;
     }
-    
+
     if (this.touchOptimizer) {
       this.touchOptimizer.destroy();
     }
-    
+
     this.clear();
-    
+
     this.onQualityChange = undefined;
     this.onPerformanceUpdate = undefined;
   }

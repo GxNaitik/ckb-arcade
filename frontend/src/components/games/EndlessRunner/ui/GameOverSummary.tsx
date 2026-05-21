@@ -4,11 +4,13 @@
  */
 
 import React, { useEffect } from 'react';
+import { getAudioContext } from '../../../../utils/audio';
 
 // Sound effects
 const playWinSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const notes = [523.25, 659.25, 783.99, 1046.50]; // C5, E5, G5, C6
     notes.forEach((freq, i) => {
       const oscillator = audioContext.createOscillator();
@@ -28,7 +30,8 @@ const playWinSound = () => {
 
 const playLossSound = () => {
   try {
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
     oscillator.connect(gainNode);
@@ -71,6 +74,7 @@ export const GameOverSummary: React.FC<GameOverSummaryProps> = ({
   coinsCollected,
   coinsValue,
   reward,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   totalEarned: _totalEarned,
   netProfit,
   profitPercentage,
@@ -205,8 +209,8 @@ export const GameOverSummary: React.FC<GameOverSummaryProps> = ({
                 <div key={index} className="flex justify-between items-center">
                   <span className="text-gray-300">{violation.type}</span>
                   <span className={`text-xs px-2 py-1 rounded ${violation.severity === 'critical' ? 'bg-red-600/30 text-red-400' :
-                      violation.severity === 'high' ? 'bg-orange-600/30 text-orange-400' :
-                        'bg-yellow-600/30 text-yellow-400'
+                    violation.severity === 'high' ? 'bg-orange-600/30 text-orange-400' :
+                      'bg-yellow-600/30 text-yellow-400'
                     }`}>
                     {violation.severity} (-{violation.penalty}%)
                   </span>

@@ -66,6 +66,8 @@ export interface RevealResponse {
     randomHex: string;
     outcome: GameOutcome;
     sessionId: string;
+    payoutTxHash?: string;
+    payoutAmountCkb?: number;
 }
 
 export interface GameOutcome {
@@ -104,6 +106,7 @@ export async function commitToBackend(params: {
     betAmount: number;
     betTxHash: string;
     playerChoice?: string | number;
+    playerAddress: string;
 }): Promise<CommitResponse> {
     const API_BASE = getApiBase();
     const payoutApiKey =
@@ -138,6 +141,7 @@ export async function commitToBackend(params: {
 export async function revealToBackend(params: {
     sessionId: string;
     playerSecret: string;
+    playerAddress: string;
 }): Promise<RevealResponse> {
     const API_BASE = getApiBase();
     const payoutApiKey =
@@ -204,6 +208,8 @@ export async function verifyFairness(params: {
 export interface CommitRevealResult {
     outcome: GameOutcome;
     proof: FairnessProof;
+    payoutTxHash?: string;
+    payoutAmountCkb?: number;
 }
 
 /**
@@ -215,6 +221,7 @@ export async function playCommitReveal(params: {
     betAmount: number;
     betTxHash: string;
     playerChoice?: string | number;
+    playerAddress: string;
 }): Promise<CommitRevealResult> {
     // 1. Generate player secret
     const secret = generateSecret();
@@ -228,12 +235,14 @@ export async function playCommitReveal(params: {
         betAmount: params.betAmount,
         betTxHash: params.betTxHash,
         playerChoice: params.playerChoice,
+        playerAddress: params.playerAddress,
     });
 
     // 3. Reveal to backend
     const revealResp = await revealToBackend({
         sessionId: commitResp.sessionId,
         playerSecret: secretHex,
+        playerAddress: params.playerAddress,
     });
 
     // 4. Verify fairness client-side
@@ -249,5 +258,7 @@ export async function playCommitReveal(params: {
     return {
         outcome: revealResp.outcome,
         proof,
+        payoutTxHash: revealResp.payoutTxHash,
+        payoutAmountCkb: revealResp.payoutAmountCkb,
     };
 }

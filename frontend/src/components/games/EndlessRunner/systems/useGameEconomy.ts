@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ccc } from '@ckb-ccc/connector-react';
 import { gameEconomy, createGameEconomy, EconomyState, GameSummary, GameStatistics, TransactionHistory } from './GameEconomy';
+import { GameSession } from './CkbAdapter';
 
 /**
  * Hook return type
@@ -17,6 +18,7 @@ export interface UseGameEconomyReturn {
   entryFee: number;
   isProcessing: boolean;
   lastError: string | null;
+  currentSession: GameSession | null;
 
   // Actions
   startGame: () => Promise<{ success: boolean; sessionId?: string; error?: string }>;
@@ -138,6 +140,7 @@ export const useGameEconomy = (gameAddress?: string, signer?: ReturnType<typeof 
     entryFee: state.entryFee / 100000000, // Convert to CKB
     isProcessing: state.isProcessing,
     lastError: state.lastError,
+    currentSession: state.currentSession,
 
     // Actions
     startGame,

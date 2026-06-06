@@ -167,8 +167,31 @@ export class CkbAdapter {
       // Create entry fee transaction
       const txHash = await this.sendEntryFeeTransaction();
 
-      // Create game session
-      const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      // Register session with backend
+      const API_BASE = import.meta.env.VITE_API_BASE || '';
+      let sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      if (API_BASE) {
+        const resp = await fetch(`${API_BASE}/api/start-survival`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            betTxHash: txHash,
+            walletAddress: this.walletAddress,
+          }),
+        });
+
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          throw new Error(errData.error || `Failed to start session on backend: ${resp.status}`);
+        }
+
+        const resJson = await resp.json();
+        sessionId = resJson.sessionId;
+      }
+
       this.currentSession = {
         id: sessionId,
         entryFee: this.ENTRY_FEE,

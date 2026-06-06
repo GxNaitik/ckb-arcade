@@ -671,6 +671,10 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
     // Stop game loop first
     gameLoop.stop();
 
+    // Get active session ID before clearing it
+    const activeSession = gameEconomy.currentSession;
+    const sessionId = activeSession ? activeSession.id : `session_demo_${Date.now()}`;
+
     // Clear the game session from economy so player can play again
     gameEconomy.forceResetSession?.();
 
@@ -688,11 +692,11 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
     // If player earned a reward, verify and claim it
     if (rewardTier > 0 && walletAddress) {
       try {
-        const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         const survivalTime = Math.floor(gameState.survivalTime);
+        const API_BASE = import.meta.env.VITE_API_BASE || '';
 
         // Call backend to verify survival and get reward
-        const response = await fetch('/api/verify-survival', {
+        const response = await fetch(`${API_BASE}/api/verify-survival`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -706,13 +710,13 @@ export const EndlessRunner: React.FC<EndlessRunnerProps> = ({
 
         if (result.verified && result.rewardAmount > 0) {
           // Trigger balance refresh after reward claim
-          _onTx?.(result.sessionId);
+          if (result.payoutTxHash) _onTx?.(result.payoutTxHash);
           setUiState(prev => ({
             ...prev,
             isProcessingPayment: false,
             lastError: null,
             rewardClaimed: true,
-            rewardTxId: result.sessionId,
+            rewardTxId: result.payoutTxHash || result.sessionId,
             rewardAmount: result.rewardAmount,
           }));
         } else {

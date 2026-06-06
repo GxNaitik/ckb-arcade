@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
 import { ccc } from '@ckb-ccc/core';
+import rateLimit from 'express-rate-limit';
+import db from './db.js';
 
 const PORT = Number(process.env.PORT ?? 8787);
 
@@ -17,35 +19,20 @@ if (!rawHousePrivateKey) {
 
 const HOUSE_PRIVATE_KEY = rawHousePrivateKey.startsWith('0x') ? rawHousePrivateKey : `0x${rawHousePrivateKey}`;
 
-// Game statistics storage (in production, use a proper database)
-const gameStats = {
-  'spin-wheel': { totalWagered: 0, totalWon: 0, gamesPlayed: 0 },
-  'dice-roll': { totalWagered: 0, totalWon: 0, gamesPlayed: 0 },
-  'coin-flip': { totalWagered: 0, totalWon: 0, gamesPlayed: 0 },
-  'number-guess': { totalWagered: 0, totalWon: 0, gamesPlayed: 0 },
-  runner: { totalWagered: 0, totalWon: 0, gamesPlayed: 0 },
-};
-
-const playerStats = new Map(); // playerAddress -> { gameId -> stats }
-
-// ─── Commit-Reveal Session Storage ────────────────────────────────────────────
-// In production, use Redis or a database. See WEEKLY_LOG.md for roadmap.
-const commitRevealSessions = new Map(); // sessionId -> session data
+// ─── Constants & Configuration ──────────────────────────────────────────────
 const SESSION_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 
-// Periodic cleanup of expired sessions
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, session] of commitRevealSessions.entries()) {
-    if (now - session.createdAt > SESSION_EXPIRY_MS) {
-      commitRevealSessions.delete(id);
-    }
+// Periodic cleanup of expired sessions from database
+setInterval(async () => {
+  const expiryTime = Date.now() - SESSION_EXPIRY_MS;
+  try {
+    await db.run('DELETE FROM commit_reveal_sessions WHERE created_at < ? AND phase = "committed"', [expiryTime]);
+  } catch (error) {
+    console.error('Failed to clear expired sessions:', error);
   }
 }, 60_000);
 
 // ─── Spin Wheel Segments (shared between frontend and backend) ────────────────
-// Multiplier-based segments: payout = betAmount × multiplier
-// RTP calc: 0.28×1.5 + 0.14×2 + 0.005×50 + 0.035×3 = 0.42+0.28+0.25+0.105 = 1.055 → ~94% after rounding
 const SPIN_SEGMENTS = [
   { label: '1.5x', multiplier: 1.5, probability: 0.28 },
   { label: 'MISS', multiplier: 0, probability: 0.28 },
@@ -60,7 +47,6 @@ const SPIN_SEGMENTS = [
  * The random is the XOR of player secret and house secret.
  */
 function computeGameOutcome(randomHex, gameType, betAmount, playerChoice) {
-  // Use first 8 bytes as a big integer for modular arithmetic
   const randomBigInt = BigInt('0x' + randomHex.slice(0, 16));
 
   switch (gameType) {
@@ -78,14 +64,12 @@ function computeGameOutcome(randomHex, gameType, betAmount, playerChoice) {
 
     case 'dice-roll': {
       const playerDice = Number((randomBigInt % 6n) + 1n);
-      // Use next 8 bytes for house dice
       const houseBigInt = BigInt('0x' + randomHex.slice(16, 32));
       const houseDice = Number((houseBigInt % 6n) + 1n);
       let won = false;
       if (playerChoice === 'higher' && playerDice > houseDice) won = true;
       else if (playerChoice === 'lower' && playerDice < houseDice) won = true;
       else if (playerChoice === 'equal' && playerDice === houseDice) won = true;
-      // Variable multiplier: higher/lower 2.3x (~96% RTP), equal 5.5x (~92% RTP)
       const multiplier = playerChoice === 'equal' ? 5.5 : 2.3;
       return {
         gameType,
@@ -97,7 +81,6 @@ function computeGameOutcome(randomHex, gameType, betAmount, playerChoice) {
     }
 
     case 'spin-wheel': {
-      // Map random to weighted segments
       const totalWeight = SPIN_SEGMENTS.reduce((s, seg) => s + seg.probability, 0);
       const randomFloat = Number(randomBigInt % 10000n) / 10000;
       let accumulated = 0;
@@ -155,69 +138,313 @@ function minCellCapacityCkb({ lock, type, dataHex }) {
   return occupiedBytes;
 }
 
-const app = express();
-app.use(cors());
-app.use(express.json({ limit: '64kb' }));
+// ─── On-Chain Bet Verification Helper ──────────────────────────────────────────
+async function verifyBetTransaction(betTxHash, expectedCkbAmount, purpose) {
+  // 1. Prevent double spending
+  const existing = await db.get('SELECT 1 FROM used_tx_hashes WHERE tx_hash = ?', [betTxHash]);
+  if (existing) {
+    throw new Error('Transaction hash has already been used');
+  }
 
-app.get('/api/games', (req, res) => {
+  // 2. Allow bypass in local dev
+  const isDev = process.env.NODE_ENV !== 'production';
+  if (isDev && (betTxHash === 'demo-mode' || betTxHash.startsWith('demo-'))) {
+    console.log(`[DEV ONLY] Skipping on-chain verification for demo transaction: ${betTxHash}`);
+    await db.run('INSERT INTO used_tx_hashes (tx_hash, purpose) VALUES (?, ?)', [betTxHash, purpose]);
+    return true;
+  }
+
+  // 3. Query blockchain
+  const client = new ccc.ClientPublicTestnet(CKB_RPC_URL ? { url: CKB_RPC_URL } : undefined);
+  const tx = await client.rpc.getTransaction(betTxHash);
+  if (!tx || !tx.txStatus || !['committed', 'proposed', 'pending'].includes(tx.txStatus.status)) {
+    throw new Error(`Transaction is not active on CKB network. Current status: ${tx ? tx.txStatus.status : 'not found'}`);
+  }
+
+  // Find the House Lock Script
+  const signer = new ccc.SignerCkbPrivateKey(client, HOUSE_PRIVATE_KEY);
+  const houseAddress = await signer.getRecommendedAddress();
+  const { script: houseLock } = await ccc.Address.fromString(houseAddress, client);
+
+  // 4. Verify outputs pay to house
+  let found = false;
+  let paidAmountShannon = 0n;
+  const outputs = tx.transaction.outputs;
+
+  for (let i = 0; i < outputs.length; i++) {
+    const output = outputs[i];
+    if (output.lock.codeHash === houseLock.codeHash &&
+        output.lock.hashType === houseLock.hashType &&
+        output.lock.args === houseLock.args) {
+      found = true;
+      paidAmountShannon = BigInt(output.capacity);
+      break;
+    }
+  }
+
+  if (!found) {
+    throw new Error('No transaction output matches the house wallet address.');
+  }
+
+  const expectedShannon = BigInt(expectedCkbAmount) * 100000000n;
+  if (paidAmountShannon < expectedShannon) {
+    throw new Error(`Transaction payment amount too low. Expected at least ${expectedCkbAmount} CKB, found ${Number(paidAmountShannon) / 100000000} CKB.`);
+  }
+
+  // Register in database
+  await db.run('INSERT INTO used_tx_hashes (tx_hash, purpose) VALUES (?, ?)', [betTxHash, purpose]);
+  return true;
+}
+
+// ─── Automated Payout Executer ─────────────────────────────────────────────────
+async function executePayout(toAddress, amountCkb) {
+  if (typeof toAddress !== 'string' || !toAddress.startsWith('ckt1')) {
+    throw new Error('Invalid toAddress (expected testnet ckt1...)');
+  }
+
+  const amountNum = Number(amountCkb);
+  if (!Number.isFinite(amountNum) || amountNum <= 0) {
+    throw new Error('Invalid amountCkb');
+  }
+
+  if (amountNum > MAX_PAYOUT_CKB) {
+    throw new Error(`amountCkb exceeds MAX_PAYOUT_CKB (${MAX_PAYOUT_CKB})`);
+  }
+
+  const client = new ccc.ClientPublicTestnet(CKB_RPC_URL ? { url: CKB_RPC_URL } : undefined);
+  const signer = new ccc.SignerCkbPrivateKey(client, HOUSE_PRIVATE_KEY);
+
+  const { script: toLock } = await ccc.Address.fromString(toAddress, client);
+
+  const outputDataHex = '0x';
+  const minCkb = minCellCapacityCkb({ lock: toLock, dataHex: outputDataHex });
+  const finalAmount = Math.max(amountNum, minCkb);
+
+  const buildAndSend = async (feeRate) => {
+    const tx = ccc.Transaction.from({
+      outputs: [{ lock: toLock, capacity: ccc.fixedPointFrom(finalAmount) }],
+      outputsData: [outputDataHex],
+    });
+
+    await tx.completeInputsByCapacity(signer);
+    await tx.completeFeeBy(signer, feeRate);
+
+    return signer.sendTransaction(tx);
+  };
+
+  let payoutTxHash;
+  let lastErr;
+  let feeRate = 1500;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      payoutTxHash = await buildAndSend(feeRate);
+      break;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      lastErr = e;
+      const isRbf = /PoolRejectedRBF|RBF rejected/i.test(msg);
+      const isDuplicate = /PoolRejectedDuplicatedTransaction|already exists in transaction_pool/i.test(msg);
+      if (!isRbf && !isDuplicate) {
+        throw e;
+      }
+
+      if (isDuplicate) {
+        const hashMatch = msg.match(/Transaction\(Byte32\((0x[0-9a-fA-F]{64})\)\)/);
+        if (hashMatch) {
+          payoutTxHash = hashMatch[1];
+          break;
+        }
+      }
+
+      feeRate = Math.ceil(feeRate * 1.5 + 500);
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+  }
+
+  if (!payoutTxHash) {
+    throw lastErr ?? new Error('Payout failed after fee bump retries');
+  }
+
+  return { payoutTxHash, finalAmount };
+}
+
+// ─── Statistics Updater ────────────────────────────────────────────────────────
+async function updateStats(gameId, playerAddress, wagered, won) {
+  try {
+    await db.run(
+      `UPDATE game_stats 
+       SET total_wagered = total_wagered + ?, 
+           total_won = total_won + ?, 
+           games_played = games_played + 1 
+       WHERE game_id = ?`,
+      [Number(wagered) || 0, Number(won) || 0, gameId]
+    );
+
+    if (playerAddress) {
+      const existing = await db.get(
+        'SELECT games_played, biggest_win FROM player_stats WHERE wallet_address = ? AND game_id = ?',
+        [playerAddress, gameId]
+      );
+
+      if (existing) {
+        const newBiggestWin = Math.max(existing.biggest_win, Number(won) || 0);
+        await db.run(
+          `UPDATE player_stats 
+           SET total_wagered = total_wagered + ?, 
+               total_won = total_won + ?, 
+               games_played = games_played + 1, 
+               biggest_win = ?, 
+               last_played = ? 
+           WHERE wallet_address = ? AND game_id = ?`,
+          [Number(wagered) || 0, Number(won) || 0, newBiggestWin, new Date().toISOString(), playerAddress, gameId]
+        );
+      } else {
+        await db.run(
+          `INSERT INTO player_stats (wallet_address, game_id, total_wagered, total_won, games_played, biggest_win, last_played) 
+           VALUES (?, ?, ?, ?, 1, ?, ?)`,
+          [playerAddress, gameId, Number(wagered) || 0, Number(won) || 0, Number(won) || 0, new Date().toISOString()]
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Failed to update stats:', error);
+  }
+}
+
+// Daily limits manager
+async function checkDailyLimit(walletAddress, maxSessions = 5) {
+  const today = new Date().toISOString().split('T')[0];
+  const row = await db.get(
+    'SELECT count FROM daily_sessions WHERE wallet_address = ? AND date = ?',
+    [walletAddress, today]
+  );
+
+  if (!row) {
+    await db.run(
+      'INSERT INTO daily_sessions (wallet_address, date, count) VALUES (?, ?, 1)',
+      [walletAddress, today]
+    );
+    return { allowed: true, remaining: maxSessions - 1 };
+  }
+
+  if (row.count >= maxSessions) {
+    return { allowed: false, remaining: 0 };
+  }
+
+  await db.run(
+    'UPDATE daily_sessions SET count = count + 1 WHERE wallet_address = ? AND date = ?',
+    [walletAddress, today]
+  );
+  return { allowed: true, remaining: maxSessions - (row.count + 1) };
+}
+
+// ─── Express App Configuration ───────────────────────────────────────────────
+const app = express();
+
+const isDev = process.env.NODE_ENV !== 'production';
+const allowedOrigins = [
+  'https://ckb-arcade.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin && isDev) {
+        return callback(null, true);
+      }
+      if (!origin) {
+        return callback(new Error('CORS blocked: Missing origin header'));
+      }
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked: Origin ${origin} not allowed`));
+      }
+    },
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+// ─── Rate Limiters ────────────────────────────────────────────────────────────
+const payoutLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: 'Too many payout requests. Please wait a minute.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const commitRevealLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  message: { error: 'Too many commit/reveal attempts. Please wait.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ─── API Endpoints ────────────────────────────────────────────────────────────
+app.get('/api/games', (_req, res) => {
   const games = [
     {
       id: 'spin-wheel',
-      name: 'Spin to Win',
-      description: 'Spin the colorful wheel and win up to 10,000 CKB!',
+      name: 'Spin Wheel',
+      description: 'Spin the wheel of fortune to multiply your CKB!',
       icon: '🎡',
       minBet: 100,
       maxBet: 1000,
-      category: 'classic',
+      category: 'luck',
       difficulty: 'easy',
-      rtp: 95,
+      rtp: 94,
       isPopular: true,
     },
     {
       id: 'dice-roll',
-      name: 'CKB Dice',
-      description: 'Roll the dice and predict your luck! Win 2x your bet on correct guess.',
+      name: 'Dice Roll',
+      description: 'Predict if the next roll is higher, lower, or equal to the house roll.',
       icon: '🎲',
-      minBet: 50,
-      maxBet: 500,
+      minBet: 100,
+      maxBet: 1000,
       category: 'luck',
-      difficulty: 'easy',
-      rtp: 97,
-      isNew: true,
+      difficulty: 'medium',
+      rtp: 96,
     },
     {
       id: 'coin-flip',
       name: 'Coin Flip',
       description: 'Classic 50/50 coin flip. Double your CKB on correct guess!',
       icon: '🪙',
-      minBet: 25,
+      minBet: 100,
       maxBet: 1000,
       category: 'luck',
       difficulty: 'easy',
-      rtp: 98,
+      rtp: 100,
       isPopular: true,
     },
     {
       id: 'number-guess',
       name: 'Number Guess',
-      description: 'Guess the number 1-10. Higher risk, higher rewards!',
+      description: 'Guess the number 1-10. Higher risk, higher rewards! 10x payout.',
       icon: '🔢',
-      minBet: 75,
+      minBet: 100,
       maxBet: 750,
       category: 'luck',
       difficulty: 'medium',
-      rtp: 90,
+      rtp: 100,
     },
     {
       id: 'runner',
-      name: 'Runner',
-      description: 'Jump over hurdles and survive to win! Fixed entry fee: 200 CKB.',
-      icon: '🏃',
+      name: 'CKB Dino Run',
+      description: 'Jump over obstacles and survive to win CKB! Entry fee: 200 CKB.',
+      icon: '🦕',
       minBet: 200,
       maxBet: 200,
       category: 'skill',
       difficulty: 'medium',
-      rtp: 92,
+      rtp: 95,
       isNew: true,
     },
   ];
@@ -225,22 +452,37 @@ app.get('/api/games', (req, res) => {
   res.json(games);
 });
 
-app.get('/api/stats/:gameId?', (req, res) => {
+app.get('/api/stats/:gameId?', async (req, res) => {
   const { gameId } = req.params;
-
-  if (gameId) {
-    const stats = gameStats[gameId];
-    if (!stats) {
-      return res.status(404).json({ error: 'Game not found' });
+  try {
+    if (gameId) {
+      const stats = await db.get('SELECT * FROM game_stats WHERE game_id = ?', [gameId]);
+      if (!stats) {
+        return res.status(404).json({ error: 'Game not found' });
+      }
+      res.json({
+        totalWagered: stats.total_wagered,
+        totalWon: stats.total_won,
+        gamesPlayed: stats.games_played,
+      });
+    } else {
+      const rows = await db.all('SELECT * FROM game_stats');
+      const stats = {};
+      for (const r of rows) {
+        stats[r.game_id] = {
+          totalWagered: r.total_wagered,
+          totalWon: r.total_won,
+          gamesPlayed: r.games_played,
+        };
+      }
+      res.json(stats);
     }
-    res.json(stats);
-  } else {
-    res.json(gameStats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-app.post('/api/stats/:gameId', (req, res) => {
-  // Require API key to prevent stat inflation by unauthorized callers
+app.post('/api/stats/:gameId', async (req, res) => {
   if (PAYOUT_API_KEY) {
     const provided = req.header('x-api-key');
     if (!provided || provided !== PAYOUT_API_KEY) {
@@ -249,47 +491,39 @@ app.post('/api/stats/:gameId', (req, res) => {
   }
 
   const { gameId } = req.params;
-  const { playerAddress, wagered, won, outcome } = req.body;
+  const { playerAddress, wagered, won } = req.body;
 
-  if (!gameStats[gameId]) {
-    return res.status(404).json({ error: 'Game not found' });
-  }
-
-  // Update global game stats
-  gameStats[gameId].totalWagered += Number(wagered) || 0;
-  gameStats[gameId].totalWon += Number(won) || 0;
-  gameStats[gameId].gamesPlayed += 1;
-
-  // Update player stats
-  if (playerAddress) {
-    if (!playerStats.has(playerAddress)) {
-      playerStats.set(playerAddress, {});
-    }
-    const playerGameStats = playerStats.get(playerAddress);
-    if (!playerGameStats[gameId]) {
-      playerGameStats[gameId] = {
-        totalWagered: 0,
-        totalWon: 0,
-        gamesPlayed: 0,
-        biggestWin: 0,
-        lastPlayed: new Date(),
-      };
+  try {
+    const checkGame = await db.get('SELECT 1 FROM game_stats WHERE game_id = ?', [gameId]);
+    if (!checkGame) {
+      return res.status(404).json({ error: 'Game not found' });
     }
 
-    playerGameStats[gameId].totalWagered += Number(wagered) || 0;
-    playerGameStats[gameId].totalWon += Number(won) || 0;
-    playerGameStats[gameId].gamesPlayed += 1;
-    playerGameStats[gameId].biggestWin = Math.max(playerGameStats[gameId].biggestWin, Number(won) || 0);
-    playerGameStats[gameId].lastPlayed = new Date();
+    await updateStats(gameId, playerAddress, wagered, won);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  res.json({ success: true });
 });
 
-app.get('/api/player/:address/stats', (req, res) => {
+app.get('/api/player/:address/stats', async (req, res) => {
   const { address } = req.params;
-  const stats = playerStats.get(address);
-  res.json(stats || {});
+  try {
+    const rows = await db.all('SELECT * FROM player_stats WHERE wallet_address = ?', [address]);
+    const stats = {};
+    for (const r of rows) {
+      stats[r.game_id] = {
+        totalWagered: r.total_wagered,
+        totalWon: r.total_won,
+        gamesPlayed: r.games_played,
+        biggestWin: r.biggest_win,
+        lastPlayed: r.last_played,
+      };
+    }
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/health', (_req, res) => {
@@ -321,10 +555,10 @@ app.get('/api/house', async (req, res) => {
   }
 });
 
-app.post('/api/payout', async (req, res) => {
-  let signer;
-  let requestedAmountCkb;
-  let requiredPayoutCkb;
+/**
+ * Kept for backup/admin operations. Protected with API Key.
+ */
+app.post('/api/payout', payoutLimiter, async (req, res) => {
   try {
     if (PAYOUT_API_KEY) {
       const provided = req.header('x-api-key');
@@ -334,112 +568,20 @@ app.post('/api/payout', async (req, res) => {
     }
 
     const { toAddress, amountCkb, betTxHash } = req.body ?? {};
+    const { payoutTxHash, finalAmount } = await executePayout(toAddress, amountCkb);
 
-    if (typeof toAddress !== 'string' || !toAddress.startsWith('ckt1')) {
-      return res.status(400).json({ error: 'Invalid toAddress (expected testnet ckt1...)' });
-    }
-
-    const amountNum = Number(amountCkb);
-    if (!Number.isFinite(amountNum) || amountNum <= 0) {
-      return res.status(400).json({ error: 'Invalid amountCkb' });
-    }
-
-    requestedAmountCkb = amountNum;
-
-    if (amountNum > MAX_PAYOUT_CKB) {
-      return res.status(400).json({ error: `amountCkb exceeds MAX_PAYOUT_CKB (${MAX_PAYOUT_CKB})` });
-    }
-
-    const client = new ccc.ClientPublicTestnet(CKB_RPC_URL ? { url: CKB_RPC_URL } : undefined);
-    signer = new ccc.SignerCkbPrivateKey(client, HOUSE_PRIVATE_KEY);
-
-    const { script: toLock } = await ccc.Address.fromString(toAddress, client);
-
-    const outputDataHex = '0x';
-    const minCkb = minCellCapacityCkb({ lock: toLock, dataHex: outputDataHex });
-    const finalAmount = Math.max(amountNum, minCkb);
-
-    requiredPayoutCkb = finalAmount;
-
-    const buildAndSend = async (feeRate) => {
-      const tx = ccc.Transaction.from({
-        outputs: [{ lock: toLock, capacity: ccc.fixedPointFrom(finalAmount) }],
-        outputsData: [outputDataHex],
-      });
-
-      await tx.completeInputsByCapacity(signer);
-      await tx.completeFeeBy(signer, feeRate);
-
-      return signer.sendTransaction(tx);
-    };
-
-    let payoutTxHash;
-    let lastErr;
-    let feeRate = 1500;
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        payoutTxHash = await buildAndSend(feeRate);
-        break;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        lastErr = e;
-        const isRbf = /PoolRejectedRBF|RBF rejected/i.test(msg);
-        const isDuplicate = /PoolRejectedDuplicatedTransaction|already exists in transaction_pool/i.test(msg);
-        if (!isRbf && !isDuplicate) {
-          throw e;
-        }
-
-        if (isDuplicate) {
-          const hashMatch = msg.match(/Transaction\(Byte32\((0x[0-9a-fA-F]{64})\)\)/);
-          if (hashMatch) {
-            payoutTxHash = hashMatch[1];
-            break;
-          }
-        }
-
-        feeRate = Math.ceil(feeRate * 1.5 + 500);
-        await new Promise((r) => setTimeout(r, 2000));
-      }
-    }
-
-    if (!payoutTxHash) {
-      throw lastErr ?? new Error('Payout failed after fee bump retries');
+    if (betTxHash) {
+      await db.run('INSERT OR IGNORE INTO used_tx_hashes (tx_hash, purpose) VALUES (?, "payout_bet_association")', [betTxHash]);
     }
 
     res.json({
       payoutTxHash,
       toAddress,
       amountCkb: finalAmount,
-      betTxHash: typeof betTxHash === 'string' ? betTxHash : undefined,
+      betTxHash,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-
-    const m = msg.match(/Insufficient CKB, need\s+([0-9.]+)\s+extra CKB/i);
-    if (m) {
-      const shortfallCkb = Number(m[1]);
-      let houseAddress;
-      let houseBalanceCkb;
-      try {
-        if (signer) {
-          houseAddress = await signer.getRecommendedAddress();
-          const bal = await signer.getBalance();
-          houseBalanceCkb = ccc.fixedPointToString(bal);
-        }
-      } catch {
-        // ignore secondary failures
-      }
-
-      return res.status(402).json({
-        error: msg,
-        shortfallCkb,
-        houseAddress,
-        houseBalanceCkb,
-        requestedAmountCkb,
-        requiredPayoutCkb,
-      });
-    }
-
     res.status(500).json({ error: msg });
   }
 });
@@ -448,53 +590,68 @@ app.post('/api/payout', async (req, res) => {
 
 /**
  * POST /api/commit
- * Player commits their hash. Backend generates and stores its own secret.
- * Returns: { sessionId, houseHash }
+ * Player commits their hash and specifies their bet transaction.
  */
-app.post('/api/commit', (req, res) => {
+app.post('/api/commit', commitRevealLimiter, async (req, res) => {
   try {
-    const { playerHash, gameType, betAmount, betTxHash, playerChoice } = req.body;
+    const { playerHash, gameType, betAmount, betTxHash, playerChoice, playerAddress } = req.body;
 
-    // Validate required fields
-    if (!playerHash || !gameType || betAmount === undefined) {
+    if (!playerHash || !gameType || betAmount === undefined || !betTxHash || !playerAddress) {
       return res.status(400).json({
-        error: 'Missing required fields: playerHash, gameType, betAmount',
+        error: 'Missing required fields: playerHash, gameType, betAmount, betTxHash, playerAddress',
       });
     }
 
-    // Validate game type
     const validGames = ['coin-flip', 'dice-roll', 'spin-wheel', 'number-guess'];
     if (!validGames.includes(gameType)) {
       return res.status(400).json({ error: `Invalid game type: ${gameType}` });
     }
 
-    // Validate player hash format (64-char hex = 32 bytes SHA-256)
     if (!/^[0-9a-f]{64}$/i.test(playerHash)) {
       return res.status(400).json({ error: 'Invalid playerHash format (expected 64-char hex)' });
     }
 
-    // Generate house secret (32 bytes)
+    // 1. Verify daily limit
+    const dailyCheck = await checkDailyLimit(playerAddress, 5);
+    if (!dailyCheck.allowed) {
+      return res.status(429).json({
+        error: 'Daily session limit reached (max 5 paid sessions per day)',
+      });
+    }
+
+    // 2. Verify bet transaction on-chain
+    try {
+      await verifyBetTransaction(betTxHash, betAmount, `bet_${gameType}`);
+    } catch (err) {
+      return res.status(400).json({ error: `Bet verification failed: ${err.message}` });
+    }
+
+    // 3. Generate house secret (32 bytes)
     const houseSecret = crypto.randomBytes(32);
     const houseHash = crypto
       .createHash('sha256')
       .update(houseSecret)
       .digest('hex');
 
-    // Generate session ID
     const sessionId = crypto.randomBytes(16).toString('hex');
 
-    // Store session
-    commitRevealSessions.set(sessionId, {
-      playerHash,
-      houseSecret: houseSecret.toString('hex'),
-      houseHash,
-      gameType,
-      betAmount: Number(betAmount),
-      betTxHash: betTxHash || null,
-      playerChoice: playerChoice ?? null,
-      phase: 'committed',
-      createdAt: Date.now(),
-    });
+    await db.run(
+      `INSERT INTO commit_reveal_sessions (
+        session_id, player_hash, house_secret, house_hash, game_type, 
+        bet_amount, bet_tx_hash, player_choice, phase, created_at, win_amount, won
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "committed", ?, 0, 0)`,
+      [
+        sessionId,
+        playerHash,
+        houseSecret.toString('hex'),
+        houseHash,
+        gameType,
+        Number(betAmount),
+        betTxHash,
+        playerChoice !== undefined ? String(playerChoice) : null,
+        Date.now(),
+      ]
+    );
 
     res.json({ sessionId, houseHash });
   } catch (e) {
@@ -505,21 +662,19 @@ app.post('/api/commit', (req, res) => {
 
 /**
  * POST /api/reveal
- * Player reveals their secret. Backend verifies hash, computes outcome.
- * Returns: { houseSecret, randomHex, outcome, sessionId }
+ * Player reveals their secret. Backend verifies, computes outcome, and distributes payouts.
  */
-app.post('/api/reveal', (req, res) => {
+app.post('/api/reveal', commitRevealLimiter, async (req, res) => {
   try {
-    const { sessionId, playerSecret } = req.body;
+    const { sessionId, playerSecret, playerAddress } = req.body;
 
-    if (!sessionId || !playerSecret) {
+    if (!sessionId || !playerSecret || !playerAddress) {
       return res.status(400).json({
-        error: 'Missing required fields: sessionId, playerSecret',
+        error: 'Missing required fields: sessionId, playerSecret, playerAddress',
       });
     }
 
-    // Look up session
-    const session = commitRevealSessions.get(sessionId);
+    const session = await db.get('SELECT * FROM commit_reveal_sessions WHERE session_id = ?', [sessionId]);
     if (!session) {
       return res.status(404).json({ error: 'Session not found or expired' });
     }
@@ -528,60 +683,79 @@ app.post('/api/reveal', (req, res) => {
       return res.status(409).json({ error: 'Session already revealed' });
     }
 
-    // Check session hasn't expired
-    if (Date.now() - session.createdAt > SESSION_EXPIRY_MS) {
-      commitRevealSessions.delete(sessionId);
+    if (Date.now() - session.created_at > SESSION_EXPIRY_MS) {
+      await db.run('DELETE FROM commit_reveal_sessions WHERE session_id = ?', [sessionId]);
       return res.status(410).json({ error: 'Session expired' });
     }
 
-    // Validate player secret format
     if (!/^[0-9a-f]{64}$/i.test(playerSecret)) {
       return res.status(400).json({ error: 'Invalid playerSecret format (expected 64-char hex)' });
     }
 
-    // Verify player's hash matches their committed hash
     const computedPlayerHash = crypto
       .createHash('sha256')
       .update(Buffer.from(playerSecret, 'hex'))
       .digest('hex');
 
-    if (computedPlayerHash !== session.playerHash) {
-      // Mark session as failed to prevent retries
-      session.phase = 'failed';
+    if (computedPlayerHash !== session.player_hash) {
+      await db.run('UPDATE commit_reveal_sessions SET phase = "failed" WHERE session_id = ?', [sessionId]);
       return res.status(400).json({
         error: 'Player secret does not match committed hash. Cheating detected.',
       });
     }
 
-    // Compute combined random: playerSecret XOR houseSecret
+    // XOR secrets
     const playerBytes = Buffer.from(playerSecret, 'hex');
-    const houseBytes = Buffer.from(session.houseSecret, 'hex');
+    const houseBytes = Buffer.from(session.house_secret, 'hex');
     const randomBytes = Buffer.alloc(32);
     for (let i = 0; i < 32; i++) {
       randomBytes[i] = playerBytes[i] ^ houseBytes[i];
     }
     const randomHex = randomBytes.toString('hex');
 
-    // Compute game outcome deterministically
+    // Compute outcome
     const outcome = computeGameOutcome(
       randomHex,
-      session.gameType,
-      session.betAmount,
-      session.playerChoice,
+      session.game_type,
+      session.bet_amount,
+      session.player_choice
     );
 
-    // Mark session as revealed
-    session.phase = 'revealed';
-    session.playerSecret = playerSecret;
-    session.randomHex = randomHex;
-    session.outcome = outcome;
-    session.revealedAt = Date.now();
+    let payoutTxHash = null;
+    let finalPayoutAmount = 0;
+
+    // Trigger payout on win
+    if (outcome.won && outcome.winAmount > 0) {
+      try {
+        const payout = await executePayout(playerAddress, outcome.winAmount);
+        payoutTxHash = payout.payoutTxHash;
+        finalPayoutAmount = payout.finalAmount;
+      } catch (payoutErr) {
+        console.error('Automated reveal payout failed:', payoutErr);
+      }
+    }
+
+    // Update session state in SQLite
+    await db.run(
+      `UPDATE commit_reveal_sessions 
+       SET phase = "revealed", payout_tx_hash = ?, win_amount = ?, won = ?
+       WHERE session_id = ?`,
+      [payoutTxHash, finalPayoutAmount, outcome.won ? 1 : 0, sessionId]
+    );
+
+    // Update global and player stats
+    await updateStats(session.game_type, playerAddress, session.bet_amount, finalPayoutAmount);
 
     res.json({
-      houseSecret: session.houseSecret,
+      houseSecret: session.house_secret,
       randomHex,
-      outcome,
+      outcome: {
+        ...outcome,
+        winAmount: finalPayoutAmount,
+      },
       sessionId,
+      payoutTxHash,
+      payoutAmountCkb: finalPayoutAmount,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -589,23 +763,13 @@ app.post('/api/reveal', (req, res) => {
   }
 });
 
-// Survival Reward Tiers (time in seconds)
+// ─── Survival (Endless Runner) Endpoints ─────────────────────────────────────
 const SURVIVAL_REWARD_TIERS = {
-  TIER_1: { time: 60, reward: 100 },      // 1 minute = 100 CKB
+  TIER_1: { time: 60, reward: 200 },      // 1 minute = 200 CKB
   TIER_2: { time: 300, reward: 500 },     // 5 minutes = 500 CKB
   TIER_3: { time: 600, reward: 1000 },    // 10 minutes = 1000 CKB
 };
 
-// Session tracking for anti-duplicate claims (in production, use Redis/database)
-const survivalSessions = new Map(); // sessionId -> { walletAddress, survivalTime, claimed, claimedAt }
-
-// Daily session tracking per wallet (anti-bot)
-const dailySessions = new Map(); // walletAddress -> { date, count }
-
-/**
- * Calculate reward tier based on survival time (server-side only)
- * This prevents client manipulation of reward values
- */
 function calculateRewardTier(survivalTime) {
   if (survivalTime >= SURVIVAL_REWARD_TIERS.TIER_3.time) return 3;
   if (survivalTime >= SURVIVAL_REWARD_TIERS.TIER_2.time) return 2;
@@ -613,9 +777,6 @@ function calculateRewardTier(survivalTime) {
   return 0;
 }
 
-/**
- * Get reward amount for tier
- */
 function getRewardForTier(tier) {
   switch (tier) {
     case 3: return SURVIVAL_REWARD_TIERS.TIER_3.reward;
@@ -626,42 +787,53 @@ function getRewardForTier(tier) {
 }
 
 /**
- * Check if wallet has exceeded daily session limit
+ * POST /api/start-survival
+ * Starts a trackable Endless Runner session on server side.
  */
-function checkDailyLimit(walletAddress, maxSessions = 5) {
-  const today = new Date().toISOString().split('T')[0];
-  const key = `${walletAddress}:${today}`;
-  const sessions = dailySessions.get(key);
+app.post('/api/start-survival', commitRevealLimiter, async (req, res) => {
+  try {
+    const { betTxHash, walletAddress } = req.body;
 
-  if (!sessions) {
-    dailySessions.set(key, { date: today, count: 1 });
-    return { allowed: true, remaining: maxSessions - 1 };
+    if (!betTxHash || !walletAddress) {
+      return res.status(400).json({ error: 'Missing required fields: betTxHash, walletAddress' });
+    }
+
+    // 1. Verify daily limit
+    const dailyCheck = await checkDailyLimit(walletAddress, 5);
+    if (!dailyCheck.allowed) {
+      return res.status(429).json({ error: 'Daily session limit reached (max 5 paid sessions per day)' });
+    }
+
+    // 2. Verify 200 CKB entry fee transaction
+    try {
+      await verifyBetTransaction(betTxHash, 200, 'survival_entry_fee');
+    } catch (err) {
+      return res.status(400).json({ error: `Bet transaction verification failed: ${err.message}` });
+    }
+
+    const sessionId = `session_runner_${crypto.randomBytes(8).toString('hex')}`;
+    const now = Date.now();
+
+    await db.run(
+      `INSERT INTO survival_sessions (session_id, wallet_address, bet_tx_hash, start_time, claimed, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)`,
+      [sessionId, walletAddress, betTxHash, now, now]
+    );
+
+    res.json({ sessionId, startTime: now });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-
-  if (sessions.count >= maxSessions) {
-    return { allowed: false, remaining: 0 };
-  }
-
-  sessions.count++;
-  return { allowed: true, remaining: maxSessions - sessions.count };
-}
+});
 
 /**
  * POST /api/verify-survival
- * Secure server-side verification for survival rewards
- * 
- * Security measures:
- * 1. Server computes reward tier (not client)
- * 2. Validates session hasn't been claimed before
- * 3. Checks reasonable survival time (< 1 hour)
- * 4. Enforces daily session limit per wallet
- * 5. Marks session as claimed immediately
+ * Verifies player survival time against server start time, computes rewards, executes payout.
  */
 app.post('/api/verify-survival', async (req, res) => {
   try {
     const { sessionId, walletAddress, survivalTime } = req.body;
 
-    // Validate required fields
     if (!sessionId || !walletAddress || survivalTime === undefined) {
       return res.status(400).json({
         verified: false,
@@ -669,76 +841,70 @@ app.post('/api/verify-survival', async (req, res) => {
       });
     }
 
-    // Validate survival time is reasonable (anti-cheat)
-    if (survivalTime <= 0 || survivalTime > 3600) {
-      return res.status(400).json({
+    const session = await db.get('SELECT * FROM survival_sessions WHERE session_id = ?', [sessionId]);
+    if (!session) {
+      return res.status(404).json({
         verified: false,
-        error: 'Invalid survival time. Must be between 1 and 3600 seconds.'
+        error: 'Survival session not found. Play session was not started correctly.'
       });
     }
 
-    // Check for duplicate claim
-    const existingSession = survivalSessions.get(sessionId);
-    if (existingSession) {
-      if (existingSession.claimed) {
-        return res.status(409).json({
-          verified: false,
-          error: 'Reward already claimed for this session',
-          claimedAt: existingSession.claimedAt
-        });
+    if (session.claimed) {
+      return res.status(409).json({
+        verified: false,
+        error: 'Reward already claimed for this session'
+      });
+    }
+
+    const elapsedSeconds = Math.floor((Date.now() - session.start_time) / 1000);
+
+    // Anti-cheat: Client reported survival time cannot be longer than real elapsed server time
+    if (survivalTime > elapsedSeconds + 5) {
+      await db.run('UPDATE survival_sessions SET claimed = 1 WHERE session_id = ?', [sessionId]);
+      return res.status(400).json({
+        verified: false,
+        error: `Speed hack or cheating detected. Reported time: ${survivalTime}s, Server elapsed: ${elapsedSeconds}s.`
+      });
+    }
+
+    // Determine the authoritative survival time
+    const authoritativeTime = Math.min(survivalTime, elapsedSeconds);
+    const rewardTier = calculateRewardTier(authoritativeTime);
+    const rewardAmount = getRewardForTier(rewardTier);
+
+    let payoutTxHash = null;
+    let finalAmount = 0;
+
+    if (rewardTier > 0 && rewardAmount > 0) {
+      try {
+        const payout = await executePayout(walletAddress, rewardAmount);
+        payoutTxHash = payout.payoutTxHash;
+        finalAmount = payout.finalAmount;
+      } catch (payoutErr) {
+        console.error('Automated survival payout failed:', payoutErr);
       }
     }
 
-    // Check daily session limit (anti-bot)
-    const dailyCheck = checkDailyLimit(walletAddress, 5);
-    if (!dailyCheck.allowed) {
-      return res.status(429).json({
-        verified: false,
-        error: 'Daily session limit reached (max 5 paid sessions per day)'
-      });
-    }
+    // Mark session as claimed in SQLite
+    await db.run(
+      `UPDATE survival_sessions 
+       SET survival_time = ?, reward_tier = ?, reward_amount = ?, claimed = 1, payout_tx_hash = ?
+       WHERE session_id = ?`,
+      [authoritativeTime, rewardTier, finalAmount, payoutTxHash, sessionId]
+    );
 
-    // Server computes reward tier (NEVER trust client-provided tier)
-    const rewardTier = calculateRewardTier(survivalTime);
-    const rewardAmount = getRewardForTier(rewardTier);
+    // Update global and player stats
+    await updateStats('runner', walletAddress, 200, finalAmount);
 
-    // If no reward tier achieved, still mark as verified but with 0 reward
-    if (rewardTier === 0) {
-      survivalSessions.set(sessionId, {
-        walletAddress,
-        survivalTime,
-        rewardTier: 0,
-        rewardAmount: 0,
-        claimed: true,
-        claimedAt: new Date().toISOString()
-      });
-
-      return res.json({
-        verified: true,
-        rewardTier: 0,
-        rewardAmount: 0,
-        message: 'No reward achieved. Survive at least 60 seconds to earn rewards.'
-      });
-    }
-
-    // Mark session as claimed before payout (prevent double-spend)
-    survivalSessions.set(sessionId, {
-      walletAddress,
-      survivalTime,
-      rewardTier,
-      rewardAmount,
-      claimed: true,
-      claimedAt: new Date().toISOString()
-    });
-
-    // Return verification result (actual payout happens via treasury wallet)
     res.json({
       verified: true,
       rewardTier,
-      rewardAmount,
+      rewardAmount: finalAmount,
       sessionId,
-      dailySessionsRemaining: dailyCheck.remaining,
-      message: `Reward verified: ${rewardAmount} CKB for ${survivalTime}s survival (Tier ${rewardTier})`
+      payoutTxHash,
+      message: rewardAmount > 0 
+        ? `Reward verified: ${finalAmount} CKB for ${authoritativeTime}s survival (Tier ${rewardTier})`
+        : `No reward tier achieved. Survived ${authoritativeTime}s. (Required: 60s)`
     });
 
   } catch (error) {
@@ -750,25 +916,27 @@ app.post('/api/verify-survival', async (req, res) => {
   }
 });
 
-/**
- * GET /api/survival-stats
- * Get survival game statistics for monitoring
- */
-app.get('/api/survival-stats', (req, res) => {
-  const stats = {
-    totalSessions: survivalSessions.size,
-    claimedSessions: Array.from(survivalSessions.values()).filter(s => s.claimed).length,
-    totalRewardsPaid: Array.from(survivalSessions.values())
-      .filter(s => s.claimed)
-      .reduce((sum, s) => sum + (s.rewardAmount || 0), 0),
-    tierDistribution: {
-      tier1: Array.from(survivalSessions.values()).filter(s => s.rewardTier === 1).length,
-      tier2: Array.from(survivalSessions.values()).filter(s => s.rewardTier === 2).length,
-      tier3: Array.from(survivalSessions.values()).filter(s => s.rewardTier === 3).length,
-    }
-  };
+app.get('/api/survival-stats', async (_req, res) => {
+  try {
+    const rows = await db.all('SELECT * FROM survival_sessions WHERE claimed = 1');
+    const totalSessions = rows.length;
+    const claimedSessions = rows.filter(s => s.reward_amount > 0).length;
+    const totalRewardsPaid = rows.reduce((sum, s) => sum + (s.reward_amount || 0), 0);
+    const tierDistribution = {
+      tier1: rows.filter(s => s.reward_tier === 1).length,
+      tier2: rows.filter(s => s.reward_tier === 2).length,
+      tier3: rows.filter(s => s.reward_tier === 3).length,
+    };
 
-  res.json(stats);
+    res.json({
+      totalSessions,
+      claimedSessions,
+      totalRewardsPaid,
+      tierDistribution,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Error handling middleware
@@ -781,7 +949,7 @@ app.use((err, _req, res, _next) => {
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`Payout server listening on http://localhost:${PORT}`);
-    console.log(`Survival reward tiers: 60s=100CKB, 300s=500CKB, 600s=1000CKB`);
+    console.log(`Survival reward tiers: 60s=200CKB, 300s=500CKB, 600s=1000CKB`);
   });
 }
 

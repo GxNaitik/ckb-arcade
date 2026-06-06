@@ -3,6 +3,7 @@ import { ccc } from '@ckb-ccc/connector-react';
 import { Loader2, Trophy, Frown, Zap } from 'lucide-react';
 import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
 import { sendWithRetry } from '../../utils/sendWithRetry';
+import { minCellCapacityCkb } from '../../utils/ckbHelpers';
 import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 interface NumberGuessProps {
@@ -14,22 +15,7 @@ interface NumberGuessProps {
   onWin: (winner: string) => void;
 }
 
-function hexByteLength(hex: string): number {
-  const h = hex.startsWith('0x') ? hex.slice(2) : hex;
-  return Math.ceil(h.length / 2);
-}
 
-function scriptOccupiedBytes(script: ccc.Script): number {
-  return 32 + 1 + hexByteLength(script.args);
-}
-
-function minCellCapacityCkb({ lock, type, dataHex }: { lock: ccc.Script; type?: ccc.Script; dataHex: string }): number {
-  const dataBytes = hexByteLength(dataHex);
-  const lockBytes = scriptOccupiedBytes(lock);
-  const typeBytes = type ? scriptOccupiedBytes(type) : 0;
-  const occupiedBytes = 8 + lockBytes + typeBytes + dataBytes;
-  return occupiedBytes;
-}
 
 export function NumberGuess({
   gameAddress,
@@ -101,6 +87,8 @@ export function NumberGuess({
       let target: number;
       let won: boolean;
       let winAmount: number;
+      let returnedPayoutTxHash: string | undefined;
+      let returnedPayoutAmountCkb: number | undefined;
 
       if (API_BASE) {
         // Provably fair mode
@@ -109,18 +97,23 @@ export function NumberGuess({
           betAmount,
           betTxHash: txHash,
           playerChoice: selectedNumber,
+          playerAddress: walletAddress ?? '',
         });
 
         const details = crResult.outcome.details as { target: number };
         target = details.target;
         won = crResult.outcome.won;
         winAmount = crResult.outcome.winAmount;
+        returnedPayoutTxHash = crResult.payoutTxHash;
+        returnedPayoutAmountCkb = crResult.payoutAmountCkb;
         setFairnessProof(crResult.proof);
       } else {
         // Demo mode
         target = Math.floor(Math.random() * 10) + 1;
         won = selectedNumber === target;
         winAmount = won ? betAmount * 10 : 0;
+        returnedPayoutTxHash = 'demo-mode';
+        returnedPayoutAmountCkb = winAmount;
       }
 
       setTargetNumber(target);
@@ -135,71 +128,8 @@ export function NumberGuess({
         setStatus('success');
         onWin(walletAddress ?? '');
 
-        try {
-          const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
-
-          if (!API_BASE) {
-            console.log('No API base URL set, skipping payout');
-            setPayoutAmountCkb(winAmount);
-            setPayoutTxHash('demo-mode');
-          } else {
-            const resp = await fetch(`${API_BASE}/api/payout`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(payoutApiKey ? { 'x-api-key': payoutApiKey } : {}),
-              },
-              body: JSON.stringify({
-                toAddress: walletAddress,
-                amountCkb: winAmount,
-                betTxHash: txHash,
-              }),
-            });
-
-            if (!resp.ok) {
-              let errorData: Record<string, unknown>;
-              try {
-                errorData = await resp.json();
-              } catch (_e) {
-                throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
-              }
-
-              if (typeof errorData.shortfallCkb === 'number') {
-                const bal = typeof errorData.houseBalanceCkb === 'string' ? errorData.houseBalanceCkb : undefined;
-                const houseAddr = typeof errorData.houseAddress === 'string' ? errorData.houseAddress : undefined;
-                const requested = typeof errorData.requestedAmountCkb === 'number' ? errorData.requestedAmountCkb : undefined;
-                const required = typeof errorData.requiredPayoutCkb === 'number' ? errorData.requiredPayoutCkb : undefined;
-                const parts = [
-                  `House wallet is underfunded. Shortfall: ${errorData.shortfallCkb} CKB.`,
-                  requested !== undefined && required !== undefined && required !== requested
-                    ? `Note: payout requires at least ${required} CKB (min cell capacity), even though this win is ${requested} CKB.`
-                    : undefined,
-                  bal ? `House balance: ${bal} CKB.` : undefined,
-                  houseAddr ? `House address: ${houseAddr}` : undefined,
-                ].filter(Boolean);
-                throw new Error(parts.join(' '));
-              }
-
-              throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
-            }
-
-            const json = await resp.json();
-            if (json.payoutTxHash) {
-              setPayoutTxHash(json.payoutTxHash);
-            }
-            if (typeof json.amountCkb === 'number') {
-              setPayoutAmountCkb(json.amountCkb);
-            }
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const isFetchFailed = /fetch failed|Failed to fetch|Unexpected response format|payout service is not available/i.test(msg);
-          setErrorText(
-            isFetchFailed
-              ? 'Payout service is not available in this demo. To test payouts, please run the backend server locally.'
-              : `Payout failed: ${msg}`,
-          );
-        }
+        if (returnedPayoutTxHash) setPayoutTxHash(returnedPayoutTxHash);
+        if (returnedPayoutAmountCkb !== undefined) setPayoutAmountCkb(returnedPayoutAmountCkb);
       } else {
         setStatus('lost');
       }

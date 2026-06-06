@@ -4,6 +4,7 @@ import { Loader2, Zap, Trophy, Frown } from 'lucide-react';
 import { getAudioContext } from '../../utils/audio';
 import { playCommitReveal, type FairnessProof } from '../../utils/commitReveal';
 import { sendWithRetry } from '../../utils/sendWithRetry';
+import { minCellCapacityCkb } from '../../utils/ckbHelpers';
 import { ProvablyFairBadge } from '../ProvablyFairBadge';
 
 // Coin flip sound effect
@@ -65,22 +66,7 @@ interface CoinFlipProps {
   onWin: (winner: string) => void;
 }
 
-function hexByteLength(hex: string): number {
-  const h = hex.startsWith('0x') ? hex.slice(2) : hex;
-  return Math.ceil(h.length / 2);
-}
 
-function scriptOccupiedBytes(script: ccc.Script): number {
-  return 32 + 1 + hexByteLength(script.args);
-}
-
-function minCellCapacityCkb({ lock, type, dataHex }: { lock: ccc.Script; type?: ccc.Script; dataHex: string }): number {
-  const dataBytes = hexByteLength(dataHex);
-  const lockBytes = scriptOccupiedBytes(lock);
-  const typeBytes = type ? scriptOccupiedBytes(type) : 0;
-  const occupiedBytes = 8 + lockBytes + typeBytes + dataBytes;
-  return occupiedBytes;
-}
 
 export function CoinFlip({
   gameAddress,
@@ -156,6 +142,8 @@ export function CoinFlip({
       let finalResult: 'heads' | 'tails';
       let won: boolean;
       let winAmount = 0;
+      let returnedPayoutTxHash: string | undefined;
+      let returnedPayoutAmountCkb: number | undefined;
 
       if (API_BASE) {
         // Provably fair mode — use commit-reveal
@@ -164,17 +152,22 @@ export function CoinFlip({
           betAmount,
           betTxHash: txHash,
           playerChoice: selectedSide,
+          playerAddress: walletAddress ?? '',
         });
 
         finalResult = crResult.outcome.details.coinResult as 'heads' | 'tails';
         won = crResult.outcome.won;
         winAmount = crResult.outcome.winAmount;
+        returnedPayoutTxHash = crResult.payoutTxHash;
+        returnedPayoutAmountCkb = crResult.payoutAmountCkb;
         setFairnessProof(crResult.proof);
       } else {
         // Demo mode — fallback to Math.random
         finalResult = Math.random() < 0.5 ? 'heads' : 'tails';
         won = selectedSide === finalResult;
         winAmount = won ? betAmount * 2 : 0;
+        returnedPayoutTxHash = 'demo-mode';
+        returnedPayoutAmountCkb = winAmount;
       }
 
       // Animate the coin to match the result
@@ -196,71 +189,8 @@ export function CoinFlip({
         onWin(walletAddress ?? '');
         playWinSound();
 
-        try {
-          const payoutApiKey = import.meta.env.VITE_PAYOUT_API_KEY;
-
-          if (!API_BASE) {
-            console.log('No API base URL set, skipping payout');
-            setPayoutAmountCkb(winAmount);
-            setPayoutTxHash('demo-mode');
-          } else {
-            const resp = await fetch(`${API_BASE}/api/payout`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(payoutApiKey ? { 'x-api-key': payoutApiKey } : {}),
-              },
-              body: JSON.stringify({
-                toAddress: walletAddress,
-                amountCkb: winAmount,
-                betTxHash: txHash,
-              }),
-            });
-
-            if (!resp.ok) {
-              let errorData: Record<string, unknown>;
-              try {
-                errorData = await resp.json();
-              } catch (_e) {
-                throw new Error(`Payout failed with status ${resp.status}: ${resp.statusText}`);
-              }
-
-              if (typeof errorData.shortfallCkb === 'number') {
-                const bal = typeof errorData.houseBalanceCkb === 'string' ? errorData.houseBalanceCkb : undefined;
-                const houseAddr = typeof errorData.houseAddress === 'string' ? errorData.houseAddress : undefined;
-                const requested = typeof errorData.requestedAmountCkb === 'number' ? errorData.requestedAmountCkb : undefined;
-                const required = typeof errorData.requiredPayoutCkb === 'number' ? errorData.requiredPayoutCkb : undefined;
-                const parts = [
-                  `House wallet is underfunded. Shortfall: ${errorData.shortfallCkb} CKB.`,
-                  requested !== undefined && required !== undefined && required !== requested
-                    ? `Note: payout requires at least ${required} CKB (min cell capacity), even though this win is ${requested} CKB.`
-                    : undefined,
-                  bal ? `House balance: ${bal} CKB.` : undefined,
-                  houseAddr ? `House address: ${houseAddr}` : undefined,
-                ].filter(Boolean);
-                throw new Error(parts.join(' '));
-              }
-
-              throw new Error((errorData.message as string) || (errorData.error as string) || `Payout failed with status ${resp.status}`);
-            }
-
-            const json = await resp.json();
-            if (json.payoutTxHash) {
-              setPayoutTxHash(json.payoutTxHash);
-            }
-            if (typeof json.amountCkb === 'number') {
-              setPayoutAmountCkb(json.amountCkb);
-            }
-          }
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const isFetchFailed = /fetch failed|Failed to fetch|Unexpected response format|payout service is not available/i.test(msg);
-          setErrorText(
-            isFetchFailed
-              ? 'Payout service is not available in this demo. To test payouts, please run the backend server locally.'
-              : `Payout failed: ${msg}`,
-          );
-        }
+        if (returnedPayoutTxHash) setPayoutTxHash(returnedPayoutTxHash);
+        if (returnedPayoutAmountCkb !== undefined) setPayoutAmountCkb(returnedPayoutAmountCkb);
       } else {
         setStatus('lost');
       }
